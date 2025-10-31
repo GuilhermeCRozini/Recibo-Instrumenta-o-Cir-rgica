@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Recibos - Daniela Ramos Oliveira</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Gerador de Recibos</h1>
+            <p>Daniela Ramos Oliveira - Instrumentação Cirúrgica</p>
+        </div>
+
+        <div class="content">
+            <div class="form-section">
+                <h2>Dados do Recibo</h2>
+
+                <div class="checkbox-container">
+                    <input type="checkbox" id="acompanhado" onchange="toggleResponsavel()">
+                    <label for="acompanhado">Acompanhado</label>
+                </div>
+
+                <div id="responsavel-section" style="display: none;">
+                    <div class="form-group">
+                        <label for="nomeResponsavel">Nome do Responsável:</label>
+                        <input type="text" id="nomeResponsavel" placeholder="Digite o nome do responsável" oninput="updatePreview()">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="cpf" id="cpfLabel">CPF:</label>
+                    <input type="text" id="cpf" placeholder="000.000.000-00" maxlength="14" oninput="formatCPF(this); updatePreview()">
+                </div>
+
+                <div class="form-group">
+                    <label for="nome">Nome do Paciente:</label>
+                    <input type="text" id="nome" placeholder="Digite o nome do paciente" oninput="updatePreview()">
+                </div>
+
+                <div class="form-group">
+                    <label for="valor">Valor (R$):</label>
+                    <input type="text" id="valor" placeholder="200,00" oninput="formatValor(this); updatePreview()">
+                </div>
+
+                <div class="form-group">
+                    <label for="cirurgia">Tipo de Cirurgia:</label>
+                    <input type="text" id="cirurgia" placeholder="Ex: ADENOAMIGDALECTOMIA" oninput="updatePreview()">
+                </div>
+
+                <div class="form-group">
+                    <label for="hospital">Hospital:</label>
+                    <input type="text" id="hospital" placeholder="Ex: UNIMED" oninput="updatePreview()">
+                </div>
+
+                <div class="form-group">
+                    <label>Data:</label>
+                    <div class="date-group">
+                        <input type="number" id="dia" placeholder="Dia" min="1" max="31" oninput="updatePreview()" onblur="formatDia(this)">
+                        <select id="mes" onchange="updateDayLimit(); updatePreview()">
+                            <option value="">Mês</option>
+                            <option value="JANEIRO">Janeiro</option>
+                            <option value="FEVEREIRO">Fevereiro</option>
+                            <option value="MARÇO">Março</option>
+                            <option value="ABRIL">Abril</option>
+                            <option value="MAIO">Maio</option>
+                            <option value="JUNHO">Junho</option>
+                            <option value="JULHO">Julho</option>
+                            <option value="AGOSTO">Agosto</option>
+                            <option value="SETEMBRO">Setembro</option>
+                            <option value="OUTUBRO">Outubro</option>
+                            <option value="NOVEMBRO">Novembro</option>
+                            <option value="DEZEMBRO">Dezembro</option>
+                        </select>
+                        <select id="ano" onchange="updateDayLimit(); updatePreview()">
+                            <option value="">Ano</option>
+                            <option value="2024">2024</option>
+                            <option value="2025" selected>2025</option>
+                            <option value="2026">2026</option>
+                            <option value="2027">2027</option>
+                            <option value="2028">2028</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div id="preview-section">
+                <h2>Preview do Recibo</h2>
+                <div id="receipt-preview">
+                    <div class="receipt-title">RECIBO</div>
+                    <div class="receipt-body" id="receipt-text">
+                        Recebi de <strong>********************************</strong>, <strong>CPF.: ***.***.***-**</strong> o valor de <strong>R$ ***,**</strong> referente ao serviço prestado da instrumentação cirúrgica para cirurgia de <strong>*******************</strong>, realizada no hospital <strong>**********</strong>.
+                    </div>
+                    <div class="receipt-location" id="receipt-location">Juiz de Fora, ** de ********** de 2025</div>
+                    <div class="receipt-signature">
+                        <div>Daniela Ramos Oliveira</div>
+                        <div>CPF 088.959.546-10</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Gerando PDF...</p>
+            </div>
+
+            <div class="btn-container">
+                <button class="btn btn-primary" onclick="showConfirmation()">Gerar PDF</button>
+                <button class="btn btn-secondary" onclick="clearForm()">Limpar Formulário</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmação -->
+    <div id="confirmModal" class="modal">
+        <div class="modal-content">
+            <h3>⚠️ Revisar Informações</h3>
+            <p style="font-family: Arial, sans-serif; margin-bottom: 20px;">Por favor, revise cuidadosamente todas as informações antes de gerar o PDF:</p>
+            
+            <div class="modal-preview" id="modalPreview">
+                <!-- Conteúdo será preenchido dinamicamente -->
+            </div>
+
+            <p style="font-family: Arial, sans-serif; font-size: 0.95em; color: #666; margin-top: 20px;">
+                <strong>Atenção:</strong> Certifique-se de que todos os dados estão corretos antes de confirmar.
+            </p>
+
+            <div class="modal-buttons">
+                <button class="btn btn-secondary" onclick="closeModal()">Voltar e Corrigir</button>
+                <button class="btn btn-primary" onclick="confirmAndGenerate()">Confirmar e Gerar PDF</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
