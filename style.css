@@ -181,11 +181,24 @@ h1 {
 }
 
 .receipt-body {
-    text-align: justify;
+    /* 
+      IMPORTANTE:
+      Antes era "justify". Em telas mais estreitas (ou em linhas com poucos termos),
+      o navegador estica os espaços entre palavras para alinhar as duas margens,
+      e isso dá a impressão de "espaços muito longos".
+
+      Como o PDF gerado NÃO usa esse CSS, esta mudança afeta apenas o PREVIEW na tela.
+    */
+    text-align: left; /* evita espaçamentos exagerados */
     line-height: 2;
     font-size: 1.05em;
     margin-bottom: 60px;
     color: #000;
+
+    /* Ajuda a quebrar palavras longas de forma mais natural (PT-BR) */
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    overflow-wrap: break-word;
 }
 
 .receipt-location {

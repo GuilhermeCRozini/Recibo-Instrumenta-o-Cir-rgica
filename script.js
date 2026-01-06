@@ -154,21 +154,32 @@ function updatePreview() {
     const dia = document.getElementById('dia').value;
     const mes = document.getElementById('mes').value;
     const ano = document.getElementById('ano').value;
+
+    // Usamos versões "limpas" dos campos para evitar que vírgula/ponto FINAL do usuário
+    // entre no <strong> (negrito). A pontuação do template fica fora do negrito.
+    const nomeResponsavelClean = stripTrailingTemplatePunctuation(nomeResponsavel);
+    const nomeClean = stripTrailingTemplatePunctuation(nome);
+    const cpfClean = stripTrailingTemplatePunctuation(cpf);
+    const cirurgiaClean = stripTrailingTemplatePunctuation(cirurgia);
+    const hospitalClean = stripTrailingTemplatePunctuation(hospital);
+
     
     let textoRecibo = 'Recebi de ';
     
     if (acompanhado && nomeResponsavel) {
-        textoRecibo += '<strong>' + nomeResponsavel.toUpperCase() + '</strong>, responsável por <strong>' + 
-                      (nome || '********************************') + '</strong>';
+        textoRecibo += '<strong>' + nomeResponsavelClean.toUpperCase() + '</strong>, responsável por <strong>' + 
+                      (nomeClean || '********************************') + '</strong>';
     } else {
-        textoRecibo += '<strong>' + (nome || '********************************') + '</strong>';
+        textoRecibo += '<strong>' + (nomeClean || '********************************') + '</strong>';
     }
     
-    textoRecibo += ', <strong>CPF.: ' + (cpf || '***.***.***-**') + '</strong>';
+        // CPF: deixa o LABEL fora do negrito e coloca em negrito apenas o NÚMERO.
+    // A vírgula depois do CPF também fica fora do negrito (pedido seu).
+    textoRecibo += ', CPF.: <strong>' + (cpfClean || '***.***.***-**') + '</strong>,';
     textoRecibo += ' o valor de <strong>R$ ' + (valor || '***,**') + '</strong>';
     textoRecibo += ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ';
-    textoRecibo += '<strong>' + (cirurgia || '*******************') + '</strong>';
-    textoRecibo += ', realizada no hospital <strong>' + (hospital || '**********') + '</strong>.';
+    textoRecibo += '<strong>' + (cirurgiaClean || '*******************') + '</strong>';
+    textoRecibo += ', realizada no hospital <strong>' + (hospitalClean || '**********') + '</strong>.';
     
     document.getElementById('receipt-text').innerHTML = textoRecibo;
     
@@ -215,7 +226,7 @@ function showModal() {
     let previewHTML = '<p><strong>Paciente:</strong> ' + nome.toUpperCase() + '</p>';
     
     if (acompanhado) {
-        previewHTML += '<p><strong>Responsável:</strong> ' + nomeResponsavel.toUpperCase() + '</p>';
+        previewHTML += '<p><strong>Responsável:</strong> ' + nomeResponsavelClean.toUpperCase() + '</p>';
         previewHTML += '<p><strong>CPF do Responsável:</strong> ' + cpf + '</p>';
     } else {
         previewHTML += '<p><strong>CPF:</strong> ' + cpf + '</p>';
@@ -239,12 +250,527 @@ function closeModal() {
 }
 
 // Gerar PDF
-function generatePDF() {
+
+// ============================================================================
+// ✅ NOVO: Toast (mensagem discreta) - melhor que alert() no mobile
+// ----------------------------------------------------------------------------
+// Por que isso existe?
+// - No celular, "alert()" é chato e pode até atrapalhar o fluxo (principalmente no iPhone).
+// - Um "toast" é só uma mensagem pequena que some sozinha.
+//
+// Observação: isso NÃO muda nada no PDF. É só um feedback para o usuário.
+// ============================================================================
+function showToast(message, duration = 2500) {
+    try {
+        let toast = document.getElementById('toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+
+            // Estilos inline para não depender do CSS do projeto.
+            toast.style.position = 'fixed';
+            toast.style.left = '50%';
+            toast.style.bottom = '24px';
+            toast.style.transform = 'translateX(-50%)';
+            toast.style.background = 'rgba(0,0,0,0.85)';
+            toast.style.color = '#fff';
+            toast.style.padding = '10px 14px';
+            toast.style.borderRadius = '10px';
+            toast.style.fontSize = '14px';
+            toast.style.zIndex = '9999';
+            toast.style.maxWidth = '90vw';
+            toast.style.textAlign = 'center';
+            toast.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
+            toast.style.opacity = '0';
+            toast.style.transition = 'opacity 150ms ease';
+
+            document.body.appendChild(toast);
+        }
+
+        toast.textContent = message;
+        toast.style.opacity = '1';
+
+        clearTimeout(window.__toastTimer);
+        window.__toastTimer = setTimeout(() => {
+            toast.style.opacity = '0';
+        }, duration);
+    } catch (e) {
+        // Se algo der errado (muito raro), não travamos o app.
+        console.log('Toast falhou:', e);
+    }
+}
+
+// ============================================================================
+// ✅ NOVO: Entregar o PDF no iPhone (iOS)
+// ----------------------------------------------------------------------------
+// Por que precisamos disso?
+// - No iPhone (Safari), downloads são "estranhos": às vezes não abre nada, ou o usuário
+//   não sabe onde foi parar.
+// - A melhor UX no iOS é abrir o menu "Compartilhar" (Salvar em Arquivos, WhatsApp, etc.).
+// - Se o dispositivo não suportar isso, abrimos um preview em nova aba.
+// - Se o Safari bloquear popup, mostramos um botão "Abrir PDF" na própria tela.
+// ============================================================================
+async function entregarPDFNoIOS(pdfBlob, filename) {
+    try {
+        const file = new File([pdfBlob], filename, { type: 'application/pdf' });
+
+        // iOS moderno (e alguns outros navegadores) suportam Web Share com arquivos.
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+                files: [file],
+                title: 'Recibo',
+                text: 'PDF do recibo gerado. Você pode salvar em Arquivos ou compartilhar.'
+            });
+            return;
+        }
+    } catch (e) {
+        // Se o usuário cancelar, ou se não suportar, seguimos para o fallback.
+    }
+
+    // Fallback: abrir preview em outra aba
+    const url = URL.createObjectURL(pdfBlob);
+    const opened = window.open(url, '_blank');
+
+    // Se o popup foi bloqueado (muito comum no Safari), mostramos um link na tela.
+    if (!opened) {
+        let box = document.getElementById('pdfLinkBox');
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'pdfLinkBox';
+
+            box.style.marginTop = '16px';
+            box.style.padding = '14px';
+            box.style.border = '2px solid #667eea';
+            box.style.borderRadius = '10px';
+            box.style.background = '#f8f9ff';
+            box.style.textAlign = 'center';
+
+            // Coloca o aviso no topo do container (onde fica o formulário)
+            const container = document.querySelector('.container');
+            if (container) container.prepend(box);
+            else document.body.prepend(box);
+        }
+
+        box.innerHTML = `
+            <strong>📄 PDF gerado!</strong><br><br>
+            <a href="${url}" target="_blank" style="font-size:16px; font-weight:bold;">
+                👉 Toque aqui para abrir o PDF
+            </a>
+            <div style="margin-top:10px; font-size:13px; color:#555;">
+                No iPhone: após abrir, toque em <strong>Compartilhar</strong> → <strong>Salvar em Arquivos</strong>
+            </div>
+        `;
+    }
+
+    // Limpa a URL depois de um tempo (boa prática).
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// ============================================================================
+// ✅ NOVO: Preencher automaticamente o ANO com o ano atual do dispositivo
+// ----------------------------------------------------------------------------
+// Pedido seu: quando abrir a página, o campo "Ano" deve vir com o ano atual,
+// mas você ainda pode alterar manualmente (o select continua livre).
+// ============================================================================
+function setAnoPadraoDoDispositivo() {
+    const anoSelect = document.getElementById('ano');
+    if (!anoSelect) return;
+
+    const anoAtual = String(new Date().getFullYear());
+
+    // Se o ano atual não existir nas opções (ex.: você colocou só 2024–2028),
+    // adicionamos ele para evitar ficar "travado" em um ano antigo.
+    const existe = Array.from(anoSelect.options).some(opt => opt.value === anoAtual);
+    if (!existe) {
+        const opt = document.createElement('option');
+        opt.value = anoAtual;
+        opt.textContent = anoAtual;
+        anoSelect.appendChild(opt);
+    }
+
+    anoSelect.value = anoAtual;
+
+    // Se o mês já estiver escolhido, isso ajuda a ajustar fevereiro (bissexto).
+    updateDayLimit();
+}
+
+// Deixa a assinatura do PREVIEW em negrito (somente a assinatura).
+// Isso não afeta o PDF (o PDF tem sua própria formatação).
+function aplicarNegritoAssinaturaPreview() {
+    const nameEl = document.querySelector('.signature-name');
+    const cpfEl = document.querySelector('.signature-cpf');
+    if (nameEl) nameEl.style.fontWeight = 'bold';
+    if (cpfEl) cpfEl.style.fontWeight = 'bold';
+}
+
+
+// ============================================================================
+// ✅ NOVO: Texto do recibo com negrito (sem "grudar" palavras)
+// ----------------------------------------------------------------------------
+// A ideia aqui é desenhar o texto "na mão" porque o jsPDF não faz negrito no meio
+// do parágrafo automaticamente.
+//
+// Também adicionamos 2 melhorias pedidas por você:
+// 1) Se "CPF.: 111...-11," não couber no final da primeira linha, jogamos TODO esse
+//    bloco para a segunda linha, e centralizamos a primeira linha.
+// 2) Evitamos que uma linha termine com palavrinhas "da/de/do/no..." (fica feio),
+//    movendo essa palavra para a linha seguinte quando possível.
+// ============================================================================
+function buildReceiptSegments({ acompanhado, nomeResponsavel, cpf, nome, valor, cirurgia, hospital }) {
+    // "Limpeza" para evitar pontuação FINAL entrar no negrito.
+    // Ex.: nome digitado como "JOÃO," -> a vírgula não deve ficar em negrito.
+    const responsavelClean = stripTrailingTemplatePunctuation(nomeResponsavel);
+    const pacienteClean = stripTrailingTemplatePunctuation(nome);
+    const cpfClean = stripTrailingTemplatePunctuation(cpf);
+    const cirurgiaClean = stripTrailingTemplatePunctuation(cirurgia);
+    const hospitalClean = stripTrailingTemplatePunctuation(hospital);
+
+    const responsavel = (responsavelClean || '').toUpperCase();
+    const paciente = (pacienteClean || '').toUpperCase();
+    const cirurgiaUp = (cirurgiaClean || '').toUpperCase();
+    const hospitalUp = (hospitalClean || '').toUpperCase();
+
+    // "group: 'cpfBlock'" = nosso "bloco não-quebrável" (CPF + número + vírgula).
+    // Assim evitamos: "CPF.:" no fim da linha e o número sozinho na linha de baixo.
+    const cpfBlock = [
+        { text: 'CPF.: ', style: 'normal', group: 'cpfBlock' },
+        { text: cpfClean, style: 'bold', group: 'cpfBlock' },
+        { text: ',', style: 'normal', group: 'cpfBlock' }
+    ];
+
+    if (acompanhado) {
+        return [
+            { text: 'Recebi de ', style: 'normal' },
+            { text: responsavel, style: 'bold' },
+            { text: ',', style: 'normal' },
+            { text: ' ', style: 'normal' }, // espaço que some automaticamente se cair no início de uma nova linha
+
+            ...cpfBlock,
+
+            { text: ' responsável de ', style: 'normal' },
+            { text: paciente, style: 'bold' },
+
+            { text: ' o valor de R$ ', style: 'normal' },
+            { text: valor, style: 'bold' },
+
+            { text: ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ', style: 'normal' },
+            { text: cirurgiaUp, style: 'bold' },
+
+            { text: ' realizada no hospital ', style: 'normal' },
+            { text: hospitalUp, style: 'bold' },
+            { text: '.', style: 'normal' }
+        ];
+    }
+
+    // Não acompanhado
+    return [
+        { text: 'Recebi de ', style: 'normal' },
+        { text: paciente, style: 'bold' },
+        { text: ',', style: 'normal' },
+        { text: ' ', style: 'normal' },
+
+        ...cpfBlock,
+
+        { text: ' o valor de R$ ', style: 'normal' },
+        { text: valor, style: 'bold' },
+
+        { text: ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ', style: 'normal' },
+        { text: cirurgiaUp, style: 'bold' },
+
+        { text: ' realizada no hospital ', style: 'normal' },
+        { text: hospitalUp, style: 'bold' },
+        { text: '.', style: 'normal' }
+    ];
+}
+
+// Divide texto preservando espaços (para não acontecer "nohospital" / "dainstrumentação")
+function tokenizeSegments(segments) {
+    const tokens = [];
+    segments.forEach(seg => {
+        const style = seg.style || 'normal';
+        const group = seg.group || null;
+        const parts = String(seg.text || '').split(/(\s+)/).filter(p => p !== '');
+        parts.forEach(p => tokens.push({ text: p, style, group }));
+    });
+    return tokens;
+}
+
+function isSpaceToken(t) {
+    return /^\s+$/.test(t);
+}
+
+// Normaliza uma palavra para comparar com nossa lista de "palavras órfãs"
+function normalizeWordForOrphanCheck(text) {
+    return String(text || '').replace(/[^A-Za-zÀ-ÿ]/g, '').toLowerCase();
+}
+
+
+// Remove pontuação FINAL (vírgula/ponto) que às vezes o usuário pode digitar sem querer.
+// Isso é útil porque nosso template já adiciona ",", "." depois dos campos.
+// Ex.: se o usuário digitar "JOÃO," no campo, a vírgula sairia em negrito (por estar dentro do campo).
+// Aqui nós removemos essas pontuações finais para que a pontuação do TEMPLATE (fora do negrito) seja usada.
+function stripTrailingTemplatePunctuation(value) {
+    let s = String(value || '').trim();
+    // remove repetidamente vírgulas/pontos apenas no FINAL
+    while (s.length && /[,.]/.test(s[s.length - 1])) {
+        s = s.slice(0, -1).trimEnd();
+    }
+    return s;
+}
+
+// Faz o "layout" do texto em linhas, considerando:
+// - largura máxima (maxWidth)
+// - negrito/normal (porque muda o tamanho do texto)
+// - blocos não-quebráveis (CPF)
+// - evitar "palavras órfãs" no fim da linha
+function layoutRichText(doc, segments, maxWidth, options = {}) {
+    const indent = Number(options.firstLineIndent || 0);
+    const cpfGroupId = options.cpfGroupId || 'cpfBlock';
+
+    // Lista de palavras pequenas que ficam feias no fim da linha
+    const orphanWords = options.orphanWords || ['da', 'de', 'do', 'das', 'dos', 'no', 'na', 'nos', 'nas', 'e'];
+    const avoidOrphans = options.avoidOrphans !== false; // padrão: true
+
+    const tokens = tokenizeSegments(segments);
+
+    // ====== "Grudar" preposições à próxima palavra (anti "dainstrumentação") ======
+    // Em alguns visualizadores de PDF, ao COPIAR o texto, a quebra de linha pode "sumir"
+    // e palavras podem aparecer grudadas (ex.: "da" + "instrumentação" -> "dainstrumentação").
+    //
+    // Para evitar isso, fazemos um mini "bloco não-quebrável" com:
+    //   [preposição] + [espaço] + [próxima palavra]
+    // Exemplos: "da instrumentação", "no hospital", "de JOÃO", etc.
+    //
+    // Importante: isso NÃO muda o texto, só evita quebrar linha no meio desses pares.
+    for (let k = 0; k < tokens.length - 2; k++) {
+        const t0 = tokens[k];
+        const t1 = tokens[k + 1];
+        const t2 = tokens[k + 2];
+
+        // Não mexe em nada que já tenha grupo (ex.: bloco do CPF)
+        if (t0.group || t1.group || t2.group) continue;
+
+        const w0 = normalizeWordForOrphanCheck(t0.text);
+        if (!w0 || !orphanWords.includes(w0)) continue;
+
+        // Precisamos do padrão: palavra + espaço + palavra
+        if (!isSpaceToken(t1.text)) continue;
+
+        const w2 = normalizeWordForOrphanCheck(t2.text);
+        if (!w2) continue;
+
+        // Grupo único só para esse trio
+        const gid = `keepNext_${k}`;
+        t0.group = gid;
+        t1.group = gid;
+        t2.group = gid;
+    }
+
+    const lines = [];
+    let lineTokens = [];
+    let lineWidth = 0;
+    let lineIndex = 0;
+
+    // Flag para saber se o CPF foi empurrado para a linha de baixo
+    let cpfWrapped = false;
+
+    const getWidth = (tok) => {
+        doc.setFont('helvetica', tok.style === 'bold' ? 'bold' : 'normal');
+        return doc.getTextWidth(tok.text);
+    };
+
+    const availableWidthForLine = (idx) => maxWidth - (idx === 0 ? indent : 0);
+
+    const trimEndSpaces = () => {
+        while (lineTokens.length && isSpaceToken(lineTokens[lineTokens.length - 1].text)) {
+            const t = lineTokens.pop();
+            lineWidth -= getWidth(t);
+        }
+    };
+
+    const pushLine = () => {
+        trimEndSpaces();
+        // Evita adicionar linha vazia sem necessidade
+        if (lineTokens.length) {
+            lines.push({ tokens: lineTokens, width: lineWidth });
+        }
+        lineTokens = [];
+        lineWidth = 0;
+        lineIndex += 1;
+    };
+
+    // Se a linha termina com "da/de/do..." e ainda existe texto depois,
+    // movemos essa palavrinha para a próxima linha.
+    const moveOrphanToNextLine = (insertAtIndex) => {
+        trimEndSpaces();
+        if (!lineTokens.length) return;
+
+        const lastTok = lineTokens[lineTokens.length - 1];
+        const lastWord = normalizeWordForOrphanCheck(lastTok.text);
+
+        if (!lastWord || !orphanWords.includes(lastWord)) return;
+
+        // Contar quantas palavras existem na linha (para não esvaziar a linha)
+        let words = 0;
+        lineTokens.forEach(t => {
+            if (!isSpaceToken(t.text) && normalizeWordForOrphanCheck(t.text)) words++;
+        });
+        if (words <= 1) return;
+
+        // Remove a palavra órfã
+        const moved = [];
+        const wordTok = lineTokens.pop();
+        lineWidth -= getWidth(wordTok);
+        moved.unshift(wordTok);
+
+        // Se existir um espaço ANTES dela, movemos junto
+        if (lineTokens.length && isSpaceToken(lineTokens[lineTokens.length - 1].text)) {
+            const spaceTok = lineTokens.pop();
+            lineWidth -= getWidth(spaceTok);
+            moved.unshift(spaceTok);
+        }
+
+        // Coloca de volta na fila para ser processado na próxima linha
+        tokens.splice(insertAtIndex, 0, ...moved);
+    };
+
+    for (let i = 0; i < tokens.length; ) {
+        const tok = tokens[i];
+
+        // Evita começar uma linha com espaço.
+        if (lineTokens.length === 0 && isSpaceToken(tok.text)) {
+            i++;
+            continue;
+        }
+
+        const available = availableWidthForLine(lineIndex);
+
+        // ====== Bloco não-quebrável (CPF) ======
+        if (tok.group) {
+            const gid = tok.group;
+            let j = i;
+            const groupTokens = [];
+
+            while (j < tokens.length && tokens[j].group === gid) {
+                groupTokens.push(tokens[j]);
+                j++;
+            }
+
+            const groupWidth = groupTokens.reduce((sum, t) => sum + getWidth(t), 0);
+
+            // Se o bloco não cabe no final da linha atual, quebramos ANTES dele.
+            // Isso é o que evita "CPF.:" na linha 1 e o número sozinho na linha 2.
+            if (groupWidth > (available - lineWidth) && lineTokens.length > 0) {
+                if (avoidOrphans) moveOrphanToNextLine(i);
+
+                // Depois de evitar órfãos, talvez a linha tenha mudado.
+                if (groupWidth > (available - lineWidth) && lineTokens.length > 0) {
+                    // Marca que o CPF foi empurrado para a linha de baixo,
+                    // mas SOMENTE se isso ocorreu na primeira linha.
+                    if (gid === cpfGroupId && lineIndex === 0) cpfWrapped = true;
+
+                    pushLine();
+                    continue; // processa o mesmo bloco novamente na próxima linha
+                }
+            }
+
+            // Se o bloco for maior que a largura da linha (muito raro),
+            // quebramos ele "na marra" (tirando o grupo) para não travar.
+            if (lineTokens.length === 0 && groupWidth > available) {
+                tokens[i] = { ...tok, group: null };
+                continue;
+            }
+
+            // Cabe: adiciona o bloco todo
+            groupTokens.forEach(t => {
+                // Evita começar linha com espaços
+                if (lineTokens.length === 0 && isSpaceToken(t.text)) return;
+                lineTokens.push(t);
+                lineWidth += getWidth(t);
+            });
+
+            i = j;
+            continue;
+        }
+
+        // ====== Token normal ======
+        const w = getWidth(tok);
+
+        if (lineWidth + w <= available) {
+            lineTokens.push(tok);
+            lineWidth += w;
+            i++;
+            continue;
+        }
+
+        // Quebra de linha por falta de espaço
+        if (lineTokens.length > 0) {
+            if (avoidOrphans) moveOrphanToNextLine(i);
+            pushLine();
+        } else {
+            // Token enorme (quase nunca): força colocar e quebra em seguida.
+            lineTokens.push(tok);
+            lineWidth += w;
+            i++;
+            pushLine();
+        }
+    }
+
+    // Última linha
+    pushLine();
+
+    return { lines, cpfWrapped };
+}
+
+// Desenha (renderiza) o texto já "quebrado" em linhas
+function drawRichText(doc, layout, x, y, maxWidth, lineHeight, options = {}) {
+    const indent = Number(options.firstLineIndent || 0);
+    const shouldCenterFirstLine = Boolean(options.centerFirstLineIfCpfWrapped && layout.cpfWrapped);
+
+    // Desenha linha por linha
+    layout.lines.forEach((line, idx) => {
+        let startX = x;
+
+        // Pedido seu: quando o CPF for empurrado para a linha de baixo,
+        // centralizamos a PRIMEIRA linha.
+        if (idx === 0) {
+            if (shouldCenterFirstLine) {
+                startX = x + (maxWidth - line.width) / 2;
+            } else {
+                startX = x + indent; // recuo pequeno só na primeira linha
+            }
+        }
+
+        let cursorX = startX;
+        const cursorY = y + (idx * lineHeight);
+
+        line.tokens.forEach(tok => {
+            doc.setFont('helvetica', tok.style === 'bold' ? 'bold' : 'normal');
+            const w = doc.getTextWidth(tok.text);
+
+            // Não precisa "desenhar" espaços, basta avançar o cursor.
+            if (!isSpaceToken(tok.text)) {
+                doc.text(tok.text, cursorX, cursorY);
+            }
+            cursorX += w;
+        });
+    });
+
+    // Retorna o Y da última linha (baseline)
+    return y + (layout.lines.length - 1) * lineHeight;
+}
+
+
+async function generatePDF() {
     vibrateDevice(100);
-    
+
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
-    
+
+    // ✅ Importante: definimos explicitamente A4 e unidade em mm
+    // para a formatação bater com o modelo (independente do dispositivo).
+    const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+
+    // ====== Coleta dos dados do formulário ======
     const acompanhado = document.getElementById('acompanhado').checked;
     const nomeResponsavel = document.getElementById('nome-responsavel').value.trim();
     const cpf = document.getElementById('cpf').value.trim();
@@ -253,83 +779,142 @@ function generatePDF() {
     const cirurgia = document.getElementById('cirurgia').value.trim();
     const hospital = document.getElementById('hospital').value.trim();
     const dia = document.getElementById('dia').value;
-    const mes = document.getElementById('mes').value;
+    const mes = document.getElementById('mes').value; // já vem em caixa alta (ex: JANEIRO)
     const ano = document.getElementById('ano').value;
-    
-    // Configurar fonte
-    doc.setFont("times", "normal");
-    
+
+    // ====== Layout base do PDF (igual ao modelo anexado) ======
+    const pageWidth = doc.internal.pageSize.getWidth();   // A4: 210mm
+    const pageHeight = doc.internal.pageSize.getHeight(); // A4: 297mm
+
+    const leftMargin = 20;   // margem parecida com o modelo
+    const rightMargin = 20;
+    const maxWidth = pageWidth - leftMargin - rightMargin;
+
+    const lineHeight = 6.1;   // espaçamento entre linhas do parágrafo
+    const firstLineIndent = 5; // "pequeno espaço" no começo do parágrafo
+
+    // Monta os "pedaços" do texto (normal/negrito)
+    const segments = buildReceiptSegments({
+        acompanhado,
+        nomeResponsavel,
+        cpf,
+        nome,
+        valor,
+        cirurgia,
+        hospital
+    });
+
+    // Primeiro: fazemos o layout (quebra em linhas) SEM desenhar ainda.
+    // Isso permite calcular o "tamanho total" do conteúdo e centralizar verticalmente.
+    doc.setFontSize(14);
+    const bodyLayout = layoutRichText(doc, segments, maxWidth, {
+        firstLineIndent,
+        cpfGroupId: 'cpfBlock',
+        avoidOrphans: true
+    });
+
+    const linesCount = Math.max(1, bodyLayout.lines.length);
+
+    // ====== Centralização vertical (top/bottom) ======
+    // Mantemos as mesmas distâncias do modelo:
+    // - título → corpo: 18mm
+    // - corpo → data: 24mm
+    // - data → assinatura: 36mm
+    // - linha do CPF da assinatura: +9mm
+    //
+    // Total = 87mm + altura do corpo (em função do número de linhas)
+const bodyHeight = (linesCount - 1) * lineHeight;
+
+// ====== Centralização vertical (top/bottom) MAIS exata ======
+// Antes, nós centralizávamos usando só "87 + bodyHeight" (distâncias entre baselines).
+// Isso é quase perfeito, mas NÃO considera que o texto tem "altura" acima/abaixo da baseline.
+// Para ficar bem no centro visual (topo e rodapé com o mesmo espaço),
+// incluímos uma estimativa da altura do texto do título e do último texto (CPF da assinatura).
+const ptToMm = (pt) => pt * 0.3527777778;
+
+// Estimativas simples (boas na prática):
+// - ascent: parte do texto acima da baseline (~70%)
+// - descent: parte do texto abaixo da baseline (~30%)
+const titleAscent = ptToMm(18) * 0.7;      // título usa fontSize 18
+const signatureDescent = ptToMm(14) * 0.3; // assinatura usa fontSize 14
+
+// "87" = (título→corpo 18) + (corpo→data 24) + (data→assinatura 36) + (assinatura nome→CPF 9)
+const totalHeight = 87 + bodyHeight + titleAscent + signatureDescent;
+
+// y do TÍTULO (baseline) calculado para centralizar o bloco inteiro na página
+const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
+
+    const bodyStartY = titleY + 18;
+    const endBodyY = bodyStartY + bodyHeight;
+
+    const dateY = endBodyY + 24;
+    const signatureNameY = dateY + 36;
+    const signatureCpfY = signatureNameY + 9;
+
+    // ====== Desenho do PDF ======
+
     // Título
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(18);
-    doc.setFont("times", "bold");
-    doc.text("RECIBO", 105, 40, { align: "center" });
-    
-    // Corpo do texto
-    doc.setFontSize(12);
-    doc.setFont("times", "normal");
-    
-    let textoRecibo = 'Recebi de ';
-    
-    if (acompanhado && nomeResponsavel) {
-        textoRecibo += nomeResponsavel.toUpperCase() + ', responsável por ' + nome.toUpperCase();
-    } else {
-        textoRecibo += nome.toUpperCase();
-    }
-    
-    textoRecibo += ', CPF.: ' + cpf + ' o valor de R$ ' + valor;
-    textoRecibo += ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ';
-    textoRecibo += cirurgia.toUpperCase() + ', realizada no hospital ' + hospital.toUpperCase() + '.';
-    
-    const linhasTexto = doc.splitTextToSize(textoRecibo, 170);
-    doc.text(linhasTexto, 20, 70);
-    
-    // Data
-    const dataCompleta = 'Juiz de Fora, ' + dia + ' de ' + mes.charAt(0) + mes.slice(1).toLowerCase() + ' de ' + ano;
-    const posicaoData = 70 + (linhasTexto.length * 10) + 30;
-    doc.text(dataCompleta, 190, posicaoData, { align: "right" });
-    
-    // Assinatura
-    const posicaoAssinatura = posicaoData + 50;
-    doc.line(55, posicaoAssinatura, 155, posicaoAssinatura);
-    
-    doc.setFont("times", "bold");
-    doc.text("Daniela Ramos Oliveira", 105, posicaoAssinatura + 7, { align: "center" });
-    
-    doc.setFont("times", "normal");
-    doc.text("CPF.: 088.959.546-10", 105, posicaoAssinatura + 14, { align: "center" });
-    
-    // Salvar com comportamento específico para mobile
+    doc.text('RECIBO', pageWidth / 2, titleY, { align: 'center' });
+
+    // Corpo do texto (com negrito no meio)
+    doc.setFontSize(14);
+
+    // Agora desenha com as regras pedidas:
+    // - CPF não quebra no meio (CPF + número + vírgula)
+    // - Se precisar quebrar, joga o CPF inteiro para a próxima linha e centraliza a 1ª linha
+    const endBodyBaseline = drawRichText(doc, bodyLayout, leftMargin, bodyStartY, maxWidth, lineHeight, {
+        firstLineIndent,
+        centerFirstLineIfCpfWrapped: true
+    });
+
+    // Data (mês em caixa alta; dia com zero à esquerda)
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(14);
+    const diaFmt = String(dia).padStart(2, '0');
+    const dataCompleta = `Juiz de Fora, ${diaFmt} de ${String(mes).toUpperCase()} de ${ano}`;
+    doc.text(dataCompleta, leftMargin, dateY);
+
+    // Assinatura (sem linha, como no modelo)
+    // Pedido seu: assinatura em NEGRITO ("Daniela Ramos Oliveira" + "CPF 088.959.546-10")
+    doc.setFont('helvetica', 'bold');
+    doc.text('Daniela Ramos Oliveira', pageWidth / 2, signatureNameY, { align: 'center' });
+    doc.text('CPF 088.959.546-10', pageWidth / 2, signatureCpfY, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+
+    // ====== Nome do arquivo (ex: Recibo_DAVI_BONIN_MONTES_05-JANEIRO-2026.pdf) ======
+    const safeNome = (nome || 'PACIENTE')
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, '_');
+
+    const nomeArquivo = `Recibo_${safeNome}_${diaFmt}-${String(mes).toUpperCase()}-${ano}.pdf`;
+
+    // ====== Salvar com comportamento específico para mobile (sem afetar Android/Desktop) ======
     const device = detectDevice();
-    const nomeArquivo = 'Recibo_' + nome.replace(/\s+/g, '_') + '_' + dia + '-' + mes + '-' + ano + '.pdf';
-    
+
     if (device.type === 'mobile') {
+        // iPhone (iOS): preferimos "Compartilhar" para o usuário escolher onde salvar.
         if (isIOS()) {
-            // iOS: Abre em nova aba
             const pdfBlob = doc.output('blob');
-            const url = URL.createObjectURL(pdfBlob);
-            window.open(url, '_blank');
-            
-            // Feedback visual
-            setTimeout(() => {
-                alert('PDF gerado! Verifique a nova aba para visualizar ou salvar.');
-            }, 500);
+            await entregarPDFNoIOS(pdfBlob, nomeArquivo);
+            showToast('PDF gerado! Use o menu Compartilhar para salvar.');
         } else if (isAndroid()) {
-            // Android: Download direto
+            // Android: download direto como antes
             doc.save(nomeArquivo);
-            
-            // Feedback visual
-            setTimeout(() => {
-                alert('PDF baixado! Verifique sua pasta de Downloads.');
-            }, 500);
+            showToast('PDF baixado! Verifique sua pasta de Downloads.');
         } else {
             // Outros mobile: fallback
             doc.save(nomeArquivo);
+            showToast('Download do PDF iniciado.');
         }
     } else {
         // Desktop/Tablet: download normal
         doc.save(nomeArquivo);
+        showToast('Download do PDF iniciado.');
     }
-    
+
     closeModal();
     vibrateDevice(200);
 }
@@ -355,6 +940,8 @@ document.addEventListener('touchend', function(event) {
 // Inicialização
 document.addEventListener('DOMContentLoaded', function() {
     displayDeviceInfo();
+    setAnoPadraoDoDispositivo();
+    aplicarNegritoAssinaturaPreview();
     updatePreview();
     
     // Atualizar info do dispositivo em resize (para tablets em rotação)
