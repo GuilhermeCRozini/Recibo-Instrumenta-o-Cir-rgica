@@ -21,12 +21,171 @@ function detectDevice() {
     return { type: deviceType, icon: deviceIcon };
 }
 
+/*
+  ================================
+  Detalhes do dispositivo (marca/modelo)
+  ================================
+
+  Observação para iniciantes:
+  - "Tipo" (mobile/tablet/desktop) conseguimos detectar bem.
+  - "Marca/Modelo" depende do que o navegador expõe. Em muitos Android (Chrome),
+    dá para pegar o "model" via User-Agent Client Hints (userAgentData).
+    Em iPhone/iPad, o Safari normalmente NÃO informa o modelo exato (ex.: iPhone 14),
+    então mostramos apenas "Apple iPhone" / "Apple iPad".
+
+  Importante:
+  - Isso serve só para exibir no badge da tela.
+  - Não interfere na geração do PDF nem muda comportamento em Android/Desktop.
+*/
+
+// Pequeno "mapa" opcional para transformar códigos em nomes comerciais.
+// Se quiser, você pode completar com o seu caso.
+// Ex.: { "SM-S711B": "Samsung Galaxy S23 FE" }
+const DEVICE_MODEL_MAP = {
+    /*
+      COMO USAR ESTE MAPA (bem simples):
+      - A chave é o "código do aparelho" que aparece no Android (ex.: SM-S711B).
+      - O valor é o nome comercial que você quer mostrar no badge (ex.: Galaxy S23 FE).
+      - Você pode adicionar/remover linhas à vontade.
+
+      DICA: deixe as chaves em MAIÚSCULAS.
+    */
+
+    // Samsung (exemplos comuns no Brasil)
+    "SM-S711B": "Galaxy S23 FE",
+
+    // Galaxy S25 Series
+    "SM-S931": "Galaxy S25",
+    "SM-S931B": "Galaxy S25",
+    "SM-S936": "Galaxy S25+",
+    "SM-S936B": "Galaxy S25+",
+    "SM-S937": "Galaxy S25 Edge",
+    "SM-S937B": "Galaxy S25 Edge",
+    "SM-S938": "Galaxy S25 Ultra",
+    "SM-S938B": "Galaxy S25 Ultra"
+};
+
+/**
+ * Converte um código de modelo (ex.: "SM-S711B") em um nome comercial (ex.: "Galaxy S23 FE")
+ * usando o DEVICE_MODEL_MAP.
+ *
+ * Por que isso existe?
+ * - Alguns navegadores devolvem o modelo com pequenas variações (ex.: "SM-S931B/DS").
+ * - Aqui normalizamos para tentar encontrar no mapa sem você precisar duplicar chaves.
+ */
+function mapModelToCommercialName(modelRaw) {
+    if (!modelRaw) return "";
+
+    // Normalização básica (iniciante-friendly):
+    // - transforma em maiúsculo
+    // - remove espaços
+    let normalized = String(modelRaw).toUpperCase().trim().replace(/\s+/g, "");
+
+    // Tenta direto
+    if (DEVICE_MODEL_MAP[normalized]) return DEVICE_MODEL_MAP[normalized];
+
+    // Remove variações comuns (Dual SIM costuma aparecer como "/DS")
+    normalized = normalized.replace(/\/DS$/i, "");
+    if (DEVICE_MODEL_MAP[normalized]) return DEVICE_MODEL_MAP[normalized];
+
+    // Às vezes aparece com sufixos longos (ex.: códigos de cor/mercado). Pegamos só o começo.
+    // Ex.: "SM-S936BLBJZTO" -> tentamos "SM-S936B" primeiro.
+    const maybeShort = normalized.match(/^SM-[A-Z0-9]+/i)?.[0] || normalized;
+    if (DEVICE_MODEL_MAP[maybeShort]) return DEVICE_MODEL_MAP[maybeShort];
+
+    // Se não achou no mapa, devolve o que veio do aparelho (melhor do que ficar vazio)
+    return modelRaw;
+}
+
+
+/** Tenta extrair uma marca a partir do User-Agent (melhor esforço). */
+function guessBrandFromUA(uaLower) {
+    if (/iphone|ipad|ipod/.test(uaLower)) return 'Apple';
+    // iPadOS às vezes se identifica como "Macintosh" no User-Agent
+    if (/macintosh/.test(uaLower) && (navigator.maxTouchPoints || 0) > 1) return 'Apple';
+    if (/samsung/.test(uaLower) || /\bsm-[a-z0-9]+\b/.test(uaLower)) return 'Samsung';
+    if (/pixel/.test(uaLower)) return 'Google';
+    if (/huawei|honor/.test(uaLower)) return 'Huawei';
+    if (/xiaomi|redmi|poco/.test(uaLower)) return 'Xiaomi';
+    if (/motorola|moto /.test(uaLower)) return 'Motorola';
+    if (/oneplus/.test(uaLower)) return 'OnePlus';
+    if (/asus/.test(uaLower)) return 'ASUS';
+    if (/sony/.test(uaLower)) return 'Sony';
+    if (/lg/.test(uaLower)) return 'LG';
+    return '';
+}
+
+/** Tenta extrair o "modelo" a partir do User-Agent (melhor esforço). */
+function guessModelFromUA(userAgent) {
+    // Muitos Android têm o padrão: "Android 14; SM-S711B Build/...."
+    const m1 = userAgent.match(/Android\s[\d\.]+;\s*([^;]+)\s*Build/i);
+    if (m1 && m1[1]) return m1[1].trim();
+
+    // Samsung: SM-XXXX explícito em vários UAs
+    const m2 = userAgent.match(/\bSM-[A-Z0-9]+\b/i);
+    if (m2 && m2[0]) return m2[0].toLocaleUpperCase('pt-BR');
+
+    // Google Pixel costuma vir como "Pixel 8" etc.
+    const m3 = userAgent.match(/\bPixel\s[\w\s]+?\b/i);
+    if (m3 && m3[0]) return m3[0].trim();
+
+    // iOS: não dá para saber o modelo (14/15/...) pelo UA
+    if (/iPhone/i.test(userAgent)) return 'iPhone';
+    if (/iPad/i.test(userAgent)) return 'iPad';
+    // iPadOS pode aparecer como Macintosh
+    if (/Macintosh/i.test(userAgent) && (navigator.maxTouchPoints || 0) > 1) return 'iPad';
+
+    return '';
+}
+
+/**
+ * Retorna uma string com "Marca Modelo" quando disponível.
+ * Ex.: "Samsung SM-S711B" ou "Google Pixel 8".
+ * Pode retornar "" se não houver dados confiáveis.
+ */
+async function getDeviceBrandModelLabel() {
+    const ua = navigator.userAgent || '';
+    const uaLower = ua.toLowerCase();
+
+    // 1) Tenta pegar model via User-Agent Client Hints (Chrome/Edge modernos)
+    // Isso funciona bem em Android Chrome. No Safari iOS, geralmente não existe.
+    let modelFromHints = '';
+    try {
+        if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+            const data = await navigator.userAgentData.getHighEntropyValues(['model', 'platform']);
+            if (data && data.model) modelFromHints = String(data.model).trim();
+        }
+    } catch (e) {
+        // Ignora: navegador não suporta ou bloqueou.
+    }
+
+    const brand = guessBrandFromUA(uaLower);
+    const modelRaw = modelFromHints || guessModelFromUA(ua);
+
+    if (!brand && !modelRaw) return '';
+
+    // Se existir um nome "bonito" no mapa, usamos.
+    const modelPretty = mapModelToCommercialName(modelRaw);
+
+    // Monta texto final
+    if (brand && modelPretty) return `${brand} ${modelPretty}`.trim();
+    if (brand) return brand;
+    return modelPretty;
+}
+
 // Exibe informação do dispositivo
-function displayDeviceInfo() {
+async function displayDeviceInfo() {
     const device = detectDevice();
     const deviceBadge = document.getElementById('device-info');
-    
-    deviceBadge.textContent = `${device.icon} ${device.type.charAt(0).toUpperCase() + device.type.slice(1)}`;
+    if (!deviceBadge) return;
+
+    // Ex.: "Mobile - Samsung SM-S711B"
+    const tipo = device.type.charAt(0).toLocaleUpperCase('pt-BR') + device.type.slice(1);
+
+    // Busca marca/modelo (melhor esforço). Pode ser "" em alguns navegadores.
+    const brandModel = await getDeviceBrandModelLabel();
+
+    deviceBadge.textContent = `${device.icon} ${brandModel ? `${tipo} - ${brandModel}` : tipo}`;
     deviceBadge.className = `device-badge ${device.type}`;
 }
 
@@ -167,7 +326,7 @@ function updatePreview() {
     let textoRecibo = 'Recebi de ';
     
     if (acompanhado && nomeResponsavel) {
-        textoRecibo += '<strong>' + nomeResponsavelClean.toUpperCase() + '</strong>, responsável por <strong>' + 
+        textoRecibo += '<strong>' + nomeResponsavelClean.toLocaleUpperCase('pt-BR') + '</strong>, responsável por <strong>' + 
                       (nomeClean || '********************************') + '</strong>';
     } else {
         textoRecibo += '<strong>' + (nomeClean || '********************************') + '</strong>';
@@ -223,18 +382,24 @@ function showModal() {
     }
     
     // Montar preview do modal
-    let previewHTML = '<p><strong>Paciente:</strong> ' + nome.toUpperCase() + '</p>';
+        // Para evitar erro no modo "Acompanhado":
+    // O preview do modal usa uma versão "limpa" do nome do responsável
+    // (sem vírgula/ponto FINAL caso o usuário digite). Isso NÃO muda o que você digitou,
+    // apenas controla como exibimos no preview.
+    const nomeResponsavelClean = stripTrailingTemplatePunctuation(nomeResponsavel);
+
+let previewHTML = '<p><strong>Paciente:</strong> ' + nome.toLocaleUpperCase('pt-BR') + '</p>';
     
     if (acompanhado) {
-        previewHTML += '<p><strong>Responsável:</strong> ' + nomeResponsavelClean.toUpperCase() + '</p>';
+        previewHTML += '<p><strong>Responsável:</strong> ' + nomeResponsavelClean.toLocaleUpperCase('pt-BR') + '</p>';
         previewHTML += '<p><strong>CPF do Responsável:</strong> ' + cpf + '</p>';
     } else {
         previewHTML += '<p><strong>CPF:</strong> ' + cpf + '</p>';
     }
     
     previewHTML += '<p><strong>Valor:</strong> R$ ' + valor + '</p>';
-    previewHTML += '<p><strong>Tipo de Cirurgia:</strong> ' + cirurgia.toUpperCase() + '</p>';
-    previewHTML += '<p><strong>Hospital:</strong> ' + hospital.toUpperCase() + '</p>';
+    previewHTML += '<p><strong>Tipo de Cirurgia:</strong> ' + cirurgia.toLocaleUpperCase('pt-BR') + '</p>';
+    previewHTML += '<p><strong>Hospital:</strong> ' + hospital.toLocaleUpperCase('pt-BR') + '</p>';
     previewHTML += '<p><strong>Data:</strong> ' + dia + ' de ' + mes.charAt(0) + mes.slice(1).toLowerCase() + ' de ' + ano + '</p>';
     
     document.getElementById('modal-preview').innerHTML = previewHTML;
@@ -425,10 +590,10 @@ function buildReceiptSegments({ acompanhado, nomeResponsavel, cpf, nome, valor, 
     const cirurgiaClean = stripTrailingTemplatePunctuation(cirurgia);
     const hospitalClean = stripTrailingTemplatePunctuation(hospital);
 
-    const responsavel = (responsavelClean || '').toUpperCase();
-    const paciente = (pacienteClean || '').toUpperCase();
-    const cirurgiaUp = (cirurgiaClean || '').toUpperCase();
-    const hospitalUp = (hospitalClean || '').toUpperCase();
+    const responsavel = (responsavelClean || '').toLocaleUpperCase('pt-BR');
+    const paciente = (pacienteClean || '').toLocaleUpperCase('pt-BR');
+    const cirurgiaUp = (cirurgiaClean || '').toLocaleUpperCase('pt-BR');
+    const hospitalUp = (hospitalClean || '').toLocaleUpperCase('pt-BR');
 
     // "group: 'cpfBlock'" = nosso "bloco não-quebrável" (CPF + número + vírgula).
     // Assim evitamos: "CPF.:" no fim da linha e o número sozinho na linha de baixo.
@@ -873,7 +1038,7 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(14);
     const diaFmt = String(dia).padStart(2, '0');
-    const dataCompleta = `Juiz de Fora, ${diaFmt} de ${String(mes).toUpperCase()} de ${ano}`;
+    const dataCompleta = `Juiz de Fora, ${diaFmt} de ${String(mes).toLocaleUpperCase('pt-BR')} de ${ano}`;
     doc.text(dataCompleta, leftMargin, dateY);
 
     // Assinatura (sem linha, como no modelo)
@@ -886,10 +1051,10 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
     // ====== Nome do arquivo (ex: Recibo_DAVI_BONIN_MONTES_05-JANEIRO-2026.pdf) ======
     const safeNome = (nome || 'PACIENTE')
         .trim()
-        .toUpperCase()
+        .toLocaleUpperCase('pt-BR')
         .replace(/\s+/g, '_');
 
-    const nomeArquivo = `Recibo_${safeNome}_${diaFmt}-${String(mes).toUpperCase()}-${ano}.pdf`;
+    const nomeArquivo = `Recibo_${safeNome}_${diaFmt}-${String(mes).toLocaleUpperCase('pt-BR')}-${ano}.pdf`;
 
     // ====== Salvar com comportamento específico para mobile (sem afetar Android/Desktop) ======
     const device = detectDevice();
