@@ -1420,7 +1420,7 @@ function layoutRichText(doc, segments, maxWidth, options = {}) {
     let cpfWrapped = false;
 
     const getWidth = (tok) => {
-        doc.setFont('helvetica', tok.style === 'bold' ? 'bold' : 'normal');
+        doc.setFont('times', tok.style === 'bold' ? 'bold' : 'normal');
         return doc.getTextWidth(tok.text);
     };
 
@@ -1590,7 +1590,7 @@ function drawRichText(doc, layout, x, y, maxWidth, lineHeight, options = {}) {
         const cursorY = y + (idx * lineHeight);
 
         line.tokens.forEach(tok => {
-            doc.setFont('helvetica', tok.style === 'bold' ? 'bold' : 'normal');
+            doc.setFont('times', tok.style === 'bold' ? 'bold' : 'normal');
             const w = doc.getTextWidth(tok.text);
 
             // Não precisa "desenhar" espaços, basta avançar o cursor.
@@ -1686,16 +1686,16 @@ const ptToMm = (pt) => pt * 0.3527777778;
 // Estimativas simples (boas na prática):
 // - ascent: parte do texto acima da baseline (~70%)
 // - descent: parte do texto abaixo da baseline (~30%)
-const titleAscent = ptToMm(18) * 0.7;      // título usa fontSize 18
+const titleAscent = ptToMm(20) * 0.7;      // título usa fontSize 20 (estilo clássico)
 const signatureDescent = ptToMm(14) * 0.3; // assinatura usa fontSize 14
 
 // "87" = (título→corpo 18) + (corpo→data 24) + (data→assinatura 36) + (assinatura nome→CPF 9)
-const totalHeight = 87 + bodyHeight + titleAscent + signatureDescent;
+const totalHeight = 91 + bodyHeight + titleAscent + signatureDescent;
 
 // y do TÍTULO (baseline) calculado para centralizar o bloco inteiro na página
 const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
 
-    const bodyStartY = titleY + 18;
+    const bodyStartY = titleY + 22;
     const endBodyY = bodyStartY + bodyHeight;
 
     const dateY = endBodyY + 24;
@@ -1705,9 +1705,17 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
     // ====== Desenho do PDF ======
 
     // Título
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
-    doc.text('RECIBO', pageWidth / 2, titleY, { align: 'center' });
+    doc.setFont('times', 'bold');
+    doc.setFontSize(20);
+    doc.text('R E C I B O', pageWidth / 2, titleY, { align: 'center' });
+
+    // Linha fina abaixo do título (visual mais profissional, sem mudar o conteúdo)
+    // Usamos uma cor cinza clara para ficar discreto.
+    doc.setDrawColor(170);
+    doc.setLineWidth(0.3);
+    doc.line(leftMargin, titleY + 4.5, pageWidth - leftMargin, titleY + 4.5);
+    doc.setDrawColor(0);
+
 
     // Corpo do texto (com negrito no meio)
     doc.setFontSize(14);
@@ -1721,7 +1729,7 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
     });
 
     // Data (mês em caixa alta; dia com zero à esquerda)
-    doc.setFont('helvetica', 'normal');
+    doc.setFont('times', 'normal');
     doc.setFontSize(14);
     const diaFmt = String(dia).padStart(2, '0');
     const dataCompleta = `Juiz de Fora, ${diaFmt} de ${String(mes).toLocaleUpperCase('pt-BR')} de ${ano}`;
@@ -1729,10 +1737,10 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
 
     // Assinatura (sem linha, como no modelo)
     // Pedido seu: assinatura em NEGRITO ("Daniela Ramos Oliveira" + "CPF 088.959.546-10")
-    doc.setFont('helvetica', 'bold');
+    doc.setFont('times', 'bold');
     doc.text('Daniela Ramos Oliveira', pageWidth / 2, signatureNameY, { align: 'center' });
     doc.text('CPF 088.959.546-10', pageWidth / 2, signatureCpfY, { align: 'center' });
-    doc.setFont('helvetica', 'normal');
+    doc.setFont('times', 'normal');
 
     // ====== Nome do arquivo (ex: Recibo_DAVI_BONIN_MONTES_05-JANEIRO-2026.pdf) ======
     const safeNome = (nome || 'PACIENTE')
