@@ -1,3 +1,12 @@
+
+// ============================================================
+// ✅ Guardamos o último PDF gerado em memória.
+// Isso permite mostrar um "menu de opções" depois de gerar:
+// - Baixar e abrir
+// - Apenas abrir
+// - (iOS) Compartilhar/Salvar
+// ============================================================
+let lastGeneratedPDF = null; // { blob: Blob, fileName: string }
 // Detecção de dispositivo
 function detectDevice() {
     const userAgent = navigator.userAgent.toLowerCase();
@@ -423,6 +432,191 @@ function closeModal() {
     document.getElementById('confirmModal').style.display = 'none';
     vibrateDevice();
 }
+
+// ============================================================
+// 📄 Modal de ações do PDF (para o usuário escolher o que fazer)
+// - Em muitos celulares (especialmente iPhone), o "download" não
+//   funciona como no PC. Então oferecemos escolhas claras.
+// ============================================================
+
+function ensurePdfActionModalExists() {
+    // Criamos o modal via JavaScript para NÃO precisar mexer no index.html
+    // (assim, você só substitui o script.js e pronto).
+    if (document.getElementById('pdfActionModal')) return;
+
+    const modal = document.createElement('div');
+    modal.id = 'pdfActionModal';
+    modal.className = 'modal';
+    modal.style.zIndex = '1100'; // fica acima do confirmModal
+
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h2>PDF gerado! O que você quer fazer?</h2>
+            <div id="pdf-action-hint" style="margin-bottom: 14px; line-height: 1.5; color: #333;"></div>
+            <div class="modal-buttons" id="pdf-action-buttons"></div>
+            <div id="pdf-action-fallback" style="margin-top: 10px; font-size: 13px; color: #555;"></div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function openPdfPreviewFromBlob(blob) {
+    // Abre o PDF em uma nova aba (preview).
+    // Como isso é chamado a partir de um clique do usuário, o navegador tende a permitir.
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, '_blank');
+
+    // Se o navegador bloquear popup, mostramos um link manual.
+    if (!opened) {
+        const fallback = document.getElementById('pdf-action-fallback');
+        if (fallback) {
+            fallback.innerHTML = `
+                O navegador bloqueou a abertura automática. Toque aqui para abrir:
+                <br><a href="${url}" target="_blank" rel="noopener"><strong>Abrir PDF</strong></a>
+            `;
+        } else {
+            showToast('Popup bloqueado. Procure um link de "Abrir PDF" na tela.');
+        }
+    }
+
+    // Revoga depois de um tempo para liberar memória.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+
+    // ✅ Retornamos se conseguiu abrir automaticamente.
+    return !!opened;
+}
+
+function downloadBlobAsFile(blob, fileName) {
+    // Faz o download do blob criando um link temporário.
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName; // sugere o nome do arquivo ao sistema
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+function closePdfActionModal() {
+    const modal = document.getElementById('pdfActionModal');
+    if (modal) modal.style.display = 'none';
+    // limpamos fallback também
+    const fallback = document.getElementById('pdf-action-fallback');
+    if (fallback) fallback.innerHTML = '';
+}
+
+function showPdfActionModal() {
+    ensurePdfActionModalExists();
+
+    const modal = document.getElementById('pdfActionModal');
+    const hint = document.getElementById('pdf-action-hint');
+    const buttons = document.getElementById('pdf-action-buttons');
+    const fallback = document.getElementById('pdf-action-fallback');
+
+    if (!lastGeneratedPDF || !lastGeneratedPDF.blob) {
+        showToast('❌ Nenhum PDF encontrado para abrir/baixar. Gere novamente.');
+        return;
+    }
+
+    // Limpa conteúdo anterior
+    if (fallback) fallback.innerHTML = '';
+    if (buttons) buttons.innerHTML = '';
+
+    const { blob, fileName } = lastGeneratedPDF;
+
+    // Texto explicativo muda conforme o sistema
+    if (hint) {
+        if (isIOS()) {
+            hint.innerHTML = `
+                No iPhone/iPad, o "download" é diferente do PC.<br>
+                Você pode <strong>abrir</strong> o PDF para visualizar, ou <strong>compartilhar/salvar</strong>
+                (ex.: "Salvar em Arquivos", WhatsApp, etc.).
+            `;
+        } else {
+            hint.innerHTML = `
+                Você quer <strong>baixar e abrir</strong> o PDF, ou <strong>apenas abrir</strong> para visualizar?
+            `;
+        }
+    }
+
+    // Botões
+    if (buttons) {
+        if (isIOS()) {
+            // iOS: "Compartilhar/Salvar" e "Apenas abrir"
+            const btnShare = document.createElement('button');
+            btnShare.className = 'btn-confirm';
+            btnShare.textContent = 'Compartilhar / Salvar';
+            btnShare.onclick = async () => {
+                try {
+                    await entregarPDFNoIOS(blob, fileName);
+                } finally {
+                    closePdfActionModal();
+                }
+            };
+
+            const btnOpen = document.createElement('button');
+            btnOpen.className = 'btn-cancel';
+            btnOpen.textContent = 'Apenas abrir';
+            btnOpen.onclick = () => {
+                const ok = openPdfPreviewFromBlob(blob);
+                // Se o popup foi bloqueado, deixamos o modal aberto para o usuário tocar no link.
+                if (ok) closePdfActionModal();
+                else showToast('Popup bloqueado: use o link "Abrir PDF" no modal.', 6000);
+            };
+
+            buttons.appendChild(btnOpen);
+            buttons.appendChild(btnShare);
+
+        } else {
+            // Android/Desktop: "Baixar e abrir" e "Apenas abrir"
+            const btnDownloadOpen = document.createElement('button');
+            btnDownloadOpen.className = 'btn-confirm';
+            btnDownloadOpen.textContent = 'Baixar e abrir';
+            btnDownloadOpen.onclick = () => {
+                downloadBlobAsFile(blob, fileName);
+                // Abrimos o preview também (em outra aba) – isso atende seu pedido:
+                // "abrir assim que baixar".
+                const ok = openPdfPreviewFromBlob(blob);
+                if (ok) {
+                    showToast('✅ Download iniciado e PDF aberto em nova aba.');
+                    closePdfActionModal();
+                } else {
+                    showToast('✅ Download iniciado. Popup bloqueado: use o link "Abrir PDF" no modal.', 7000);
+                    // Mantém o modal aberto para o usuário tocar no link.
+                }
+            };
+
+            const btnOpenOnly = document.createElement('button');
+            btnOpenOnly.className = 'btn-cancel';
+            btnOpenOnly.textContent = 'Apenas abrir';
+            btnOpenOnly.onclick = () => {
+                const ok = openPdfPreviewFromBlob(blob);
+                if (ok) {
+                    showToast('✅ PDF aberto em nova aba.');
+                    closePdfActionModal();
+                } else {
+                    showToast('Popup bloqueado: use o link "Abrir PDF" no modal.', 6000);
+                    // Mantém o modal aberto para o usuário tocar no link.
+                }
+            };
+
+            // Opcional: botão cancelar para fechar o modal
+            const btnCancel = document.createElement('button');
+            btnCancel.className = 'btn-cancel';
+            btnCancel.textContent = 'Cancelar';
+            btnCancel.onclick = () => closePdfActionModal();
+
+            buttons.appendChild(btnOpenOnly);
+            buttons.appendChild(btnDownloadOpen);
+            buttons.appendChild(btnCancel);
+        }
+    }
+
+    modal.style.display = 'block';
+}
+
 
 // Gerar PDF
 
@@ -1107,32 +1301,20 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
 
     const nomeArquivo = `Recibo_${safeNome}_${diaFmt}-${String(mes).toLocaleUpperCase('pt-BR')}-${ano}.pdf`;
 
-    // ====== Salvar com comportamento específico para mobile (sem afetar Android/Desktop) ======
-    const device = detectDevice();
+    // ====== Depois de gerar: perguntar o que fazer (abrir/baixar) ======
+    // Em vez de iniciar download automaticamente, mostramos um menu de opções
+    // para o usuário escolher (isso melhora MUITO no iPhone e também dá controle no Android/PC).
+    const pdfBlob = doc.output('blob');
 
-    if (device.type === 'mobile') {
-        // iPhone (iOS): preferimos "Compartilhar" para o usuário escolher onde salvar.
-        if (isIOS()) {
-            const pdfBlob = doc.output('blob');
-            await entregarPDFNoIOS(pdfBlob, nomeArquivo);
-            showToast('PDF gerado! Use o menu Compartilhar para salvar.');
-        } else if (isAndroid()) {
-            // Android: download direto como antes
-            doc.save(nomeArquivo);
-            showToast('PDF baixado! Verifique sua pasta de Downloads.');
-        } else {
-            // Outros mobile: fallback
-            doc.save(nomeArquivo);
-            showToast('Download do PDF iniciado.');
-        }
-    } else {
-        // Desktop/Tablet: download normal
-        doc.save(nomeArquivo);
-        showToast('Download do PDF iniciado.');
-    }
+    // Guardamos o PDF na memória para os botões do modal usarem.
+    lastGeneratedPDF = { blob: pdfBlob, fileName: nomeArquivo };
 
+    // Fecha o modal de confirmação e abre o modal de ações.
     closeModal();
+    showPdfActionModal();
+
     vibrateDevice(200);
+    return;
 
     } catch (err) {
         console.error('Falha ao gerar PDF:', err);
@@ -1143,10 +1325,19 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
 
 // Fechar modal ao clicar fora
 window.onclick = function(event) {
-    const modal = document.getElementById('confirmModal');
-    if (event.target === modal) {
+    // Fecha o modal de confirmação (clique fora)
+    const confirmModal = document.getElementById('confirmModal');
+    if (event.target === confirmModal) {
         closeModal();
+        return;
     }
+
+    // Fecha o modal de ações do PDF (clique fora)
+    const pdfActionModal = document.getElementById('pdfActionModal');
+    if (pdfActionModal && event.target === pdfActionModal) {
+        closePdfActionModal();
+    }
+}
 }
 
 // Prevenir zoom no double tap em iOS
