@@ -459,8 +459,38 @@ function formatValor(input) {
 }
 
 // Alternar campos de responsável
+
+// ============================================================
+// ✅ Reordenar campos (Nome do Paciente / CPF) quando NÃO estiver "Acompanhado"
+// Pedido: se "Acompanhado" NÃO estiver marcado, o campo "Nome do Paciente" deve
+// ficar acima do campo CPF. Se estiver marcado, voltamos ao padrão (CPF acima do Nome).
+//
+// Observação para iniciantes:
+// - Em HTML, a ordem na tela é a ordem dos elementos no DOM.
+// - Aqui nós apenas movemos os blocos (divs) de lugar com insertBefore.
+// - Isso NÃO altera valores digitados nem afeta a geração do PDF.
+// ============================================================
+function reorderNomeCpfFields(isAcompanhadoChecked) {
+    const cpfGroup = document.getElementById('cpf-group');
+    const nomeGroup = document.getElementById('nome-group');
+
+    // Se algum elemento não existir, não faz nada.
+    if (!cpfGroup || !nomeGroup || !cpfGroup.parentNode) return;
+
+    if (isAcompanhadoChecked) {
+        // Acompanhado: CPF acima do Nome (padrão)
+        cpfGroup.parentNode.insertBefore(cpfGroup, nomeGroup);
+    } else {
+        // Não acompanhado: Nome acima do CPF (pedido)
+        cpfGroup.parentNode.insertBefore(nomeGroup, cpfGroup);
+    }
+}
+
 function toggleResponsavel() {
     const acompanhado = document.getElementById('acompanhado').checked;
+
+    // Reordena os campos conforme o estado do checkbox
+    reorderNomeCpfFields(acompanhado);
     const responsavelGroup = document.getElementById('responsavel-group');
     const cpfLabel = document.getElementById('cpf-label');
     
@@ -478,6 +508,32 @@ function toggleResponsavel() {
 }
 
 // Atualizar limite de dias baseado no mês
+
+// ============================================================
+// ✅ Limitar o valor do dia ao máximo permitido (mês/ano)
+// Pedido: impedir que o usuário digite um dia fora do intervalo.
+//
+// Como funciona:
+// - updateDayLimit() calcula e define o atributo diaInput.max
+// - enforceDayLimit() garante que o valor digitado respeite min/max
+// ============================================================
+function enforceDayLimit() {
+    const diaInput = document.getElementById('dia');
+    if (!diaInput) return;
+
+    // Se estiver vazio, não forçamos nada (usuário ainda está digitando)
+    if (diaInput.value === '') return;
+
+    const min = parseInt(diaInput.min || '1', 10);
+    const max = parseInt(diaInput.max || '31', 10);
+    const v = parseInt(diaInput.value, 10);
+
+    if (Number.isNaN(v)) return;
+
+    if (v < min) diaInput.value = String(min);
+    if (v > max) diaInput.value = String(max);
+}
+
 function updateDayLimit() {
     const mes = document.getElementById('mes').value;
     const ano = parseInt(document.getElementById('ano').value);
@@ -506,6 +562,9 @@ function updateDayLimit() {
     if (diaAtual > maxDias) {
         diaInput.value = maxDias;
     }
+
+    // Garante que o valor digitado respeite o novo max
+    enforceDayLimit();
 }
 
 // Atualizar preview
@@ -1306,6 +1365,14 @@ document.addEventListener('DOMContentLoaded', function() {
     setAnoPadraoDoDispositivo();
     aplicarNegritoAssinaturaPreview();
     updatePreview();
+
+    // Aplica a ordem correta dos campos logo ao carregar a página
+    const chk = document.getElementById('acompanhado');
+    if (chk) reorderNomeCpfFields(chk.checked);
+
+    // Limita o dia enquanto o usuário digita (mês/ano selecionados)
+    const diaInput = document.getElementById('dia');
+    if (diaInput) diaInput.addEventListener('input', enforceDayLimit);
     
     // Atualizar info do dispositivo em resize (para tablets em rotação)
     let resizeTimer;
