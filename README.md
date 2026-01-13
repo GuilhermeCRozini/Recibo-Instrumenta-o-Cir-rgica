@@ -216,5 +216,5 @@ Para dúvidas ou problemas, verifique se:
 ---
 
 **Versão:** 2.0 - Mobile Optimized  
-**Última atualização:** Outubro 2025  
+**Última atualização:** Janeiro 2026  
 **Compatibilidade:** Desktop, Tablet, Mobile
