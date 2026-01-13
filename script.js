@@ -1,271 +1,411 @@
-
 // ============================================================
-// ✅ Guardamos o último PDF gerado em memória.
-// Isso permite mostrar um "menu de opções" depois de gerar:
-// - Baixar e abrir
-// - Apenas abrir
-// - (iOS) Compartilhar/Salvar
+// ✅ PDF: opções depois de gerar (Abrir / Baixar e abrir / Compartilhar no iOS)
+// Motivo: navegadores (especialmente Safari/iOS) não permitem forçar
+// um "prompt do sistema" perguntando onde salvou. Então nós mostramos
+// um modal nosso, com botões claros para o usuário escolher.
 // ============================================================
 let lastGeneratedPDF = null; // { blob: Blob, fileName: string }
+
+/**
+ * Faz download do PDF a partir de um Blob.
+ * Obs: No iOS/Safari o atributo download pode ser ignorado (limitação do iOS).
+ */
+function downloadPdfFromBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+/**
+ * Abre o PDF em uma nova aba (preview).
+ * Se o Safari bloquear popup, mostramos um link para o usuário tocar.
+ */
+function openPdfFromBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, '_blank');
+
+    if (!opened) {
+        // Popup bloqueado: mostramos um link visível
+        showOpenPdfLink(url, fileName);
+    }
+
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+/**
+ * Mostra um link na tela para o usuário abrir o PDF caso o navegador bloqueie popups.
+ */
+function showOpenPdfLink(url, fileName) {
+    let box = document.getElementById('pdfLinkBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'pdfLinkBox';
+        box.style.marginTop = '20px';
+        box.style.padding = '15px';
+        box.style.border = '2px solid #667eea';
+        box.style.borderRadius = '10px';
+        box.style.background = '#f8f9ff';
+        box.style.textAlign = 'center';
+        box.style.display = 'grid';
+        box.style.gap = '10px';
+        const container = document.querySelector('.container') || document.body;
+        container.prepend(box);
+    }
+
+    box.innerHTML = `
+        <strong>📄 PDF gerado com sucesso!</strong>
+        <a href="${url}" target="_blank" rel="noopener" style="font-size:16px; font-weight:bold;">
+            👉 Toque aqui para abrir o PDF (${escapeHtml(fileName)})
+        </a>
+        <div style="font-size:13px; color:#555;">
+            No iPhone/iPad: depois de abrir, toque em <strong>Compartilhar</strong> → <strong>Salvar em Arquivos</strong>.
+        </div>
+    `;
+}
+
+/** Pequena função de escape para evitar quebrar HTML caso o nome do arquivo tenha caracteres especiais */
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+/**
+ * iOS: tenta abrir a Share Sheet (Compartilhar) com o PDF.
+ * Retorna true se conseguiu abrir o compartilhar, false se não suportado/falhou.
+ */
+async function sharePdfIOS(blob, fileName) {
+    try {
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+                files: [file],
+                title: 'Recibo Médico',
+                text: 'PDF do recibo gerado. Você pode salvar em Arquivos ou compartilhar.'
+            });
+            return true;
+        }
+    } catch (e) {
+        // usuário cancelou ou não suportado
+    }
+    return false;
+}
+
+/**
+ * Mostra um modal com as opções após gerar o PDF.
+ * - Android/Desktop: "Baixar e abrir" ou "Apenas abrir"
+ * - iOS: "Compartilhar/Salvar" ou "Apenas abrir"
+ */
+function showPdfOptionsModal(blob, fileName) {
+    // Remove modal antigo se existir
+    const old = document.getElementById('pdfOptionsModal');
+    if (old) old.remove();
+
+    const isIOSDevice = isIOS();
+
+    const modal = document.createElement('div');
+    modal.id = 'pdfOptionsModal';
+    modal.className = 'modal';
+    modal.style.display = 'block';
+
+    const title = isIOSDevice ? 'O que você quer fazer com o PDF?' : 'Abrir o PDF agora?';
+    const primaryText = isIOSDevice ? 'Compartilhar / Salvar' : 'Baixar e abrir';
+    const secondaryText = 'Apenas abrir';
+
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h2>${title}</h2>
+            <div style="background:#f8f9ff; padding:14px; border-radius:8px; margin-bottom:16px; line-height:1.5;">
+                <p style="margin:0 0 6px 0;"><strong>Arquivo:</strong> ${escapeHtml(fileName)}</p>
+                <p style="margin:0; font-size:13px; color:#555;">
+                    ${isIOSDevice
+                        ? 'No iPhone/iPad, o "download" é feito via Compartilhar → Salvar em Arquivos.'
+                        : 'Você pode baixar (salvar) e também abrir para visualizar.'}
+                </p>
+            </div>
+            <div class="modal-buttons">
+                <button id="pdfOptCancel" class="btn-cancel">Cancelar</button>
+                <button id="pdfOptSecondary" class="btn-cancel">${secondaryText}</button>
+                <button id="pdfOptPrimary" class="btn-confirm">${primaryText}</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Ações dos botões:
+    modal.querySelector('#pdfOptCancel').onclick = () => modal.remove();
+
+    modal.querySelector('#pdfOptSecondary').onclick = () => {
+        // Apenas abrir (preview)
+        openPdfFromBlob(blob, fileName);
+        modal.remove();
+    };
+
+    modal.querySelector('#pdfOptPrimary').onclick = async () => {
+        if (isIOSDevice) {
+            // iOS: compartilhar/salvar
+            const shared = await sharePdfIOS(blob, fileName);
+            if (!shared) {
+                // fallback: abrir preview se share não suportado
+                openPdfFromBlob(blob, fileName);
+            }
+        } else {
+            // Android/Desktop: baixar e abrir
+            // 1) Abrir primeiro (para reduzir risco de bloqueio de popup)
+            openPdfFromBlob(blob, fileName);
+            // 2) Baixar
+            downloadPdfFromBlob(blob, fileName);
+        }
+        modal.remove();
+    };
+
+    // Fechar ao clicar fora do conteúdo
+    modal.onclick = (e) => {
+        if (e.target === modal) modal.remove();
+    };
+}
+
 // Detecção de dispositivo
 function detectDevice() {
     const userAgent = navigator.userAgent.toLowerCase();
     const isMobile = /iphone|ipod|android|blackberry|opera mini|windows phone|mobile/i.test(userAgent);
     const isTablet = /ipad|android(?!.*mobile)|tablet/i.test(userAgent);
-    
+
     // Também verifica largura da tela
     const screenWidth = window.innerWidth;
-    
-    let deviceType = 'desktop';
-    let deviceIcon = '💻';
-    
+
+    let type = 'desktop';
+    let icon = '💻';
+
     if (isMobile || screenWidth < 768) {
-        deviceType = 'mobile';
-        deviceIcon = '📱';
-    } else if (isTablet || (screenWidth >= 768 && screenWidth <= 1024)) {
-        deviceType = 'tablet';
-        deviceIcon = '📱';
+        type = 'mobile';
+        icon = '📱';
+    } else if (isTablet || (screenWidth >= 768 && screenWidth < 1024)) {
+        type = 'tablet';
+        icon = '📱';
     }
-    
-    return { type: deviceType, icon: deviceIcon };
+
+    // Marca/modelo (best-effort; iOS normalmente não revela modelo exato)
+    const brandModel = getBrandAndModel();
+
+    return { type, icon, brandModel };
 }
 
-/*
-  ================================
-  Detalhes do dispositivo (marca/modelo)
-  ================================
+function isIOS() {
+    const ua = navigator.userAgent || '';
+    return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
 
-  Observação para iniciantes:
-  - "Tipo" (mobile/tablet/desktop) conseguimos detectar bem.
-  - "Marca/Modelo" depende do que o navegador expõe. Em muitos Android (Chrome),
-    dá para pegar o "model" via User-Agent Client Hints (userAgentData).
-    Em iPhone/iPad, o Safari normalmente NÃO informa o modelo exato (ex.: iPhone 14),
-    então mostramos apenas "Apple iPhone" / "Apple iPad".
+function isAndroid() {
+    const ua = navigator.userAgent || '';
+    return /Android/i.test(ua);
+}
 
-  Importante:
-  - Isso serve só para exibir no badge da tela.
-  - Não interfere na geração do PDF nem muda comportamento em Android/Desktop.
-*/
-
-// Pequeno "mapa" opcional para transformar códigos em nomes comerciais.
-// Se quiser, você pode completar com o seu caso.
-// Ex.: { "SM-S711B": "Samsung Galaxy S23 FE" }
+// ============================================================
+// ✅ Mapa opcional: códigos → nomes comerciais
+// Você pode ir adicionando mais modelos aqui.
+// ============================================================
 const DEVICE_MODEL_MAP = {
-    /*
-      COMO USAR ESTE MAPA (bem simples):
-      - A chave é o "código do aparelho" que aparece no Android (ex.: SM-S711B).
-      - O valor é o nome comercial que você quer mostrar no badge (ex.: Galaxy S23 FE).
-      - Você pode adicionar/remover linhas à vontade.
-
-      DICA: deixe as chaves em MAIÚSCULAS.
-    */
-
-    // Samsung (exemplos comuns no Brasil)
+    // Samsung (exemplos + famílias)
+    "SM-S931B": "Galaxy S25",
+    "SM-S936B": "Galaxy S25+",
+    "SM-S938B": "Galaxy S25 Ultra",
+    // Seu aparelho (exemplo comum)
     "SM-S711B": "Galaxy S23 FE",
 
-    // Galaxy S25 Series
-    "SM-S931": "Galaxy S25",
-    "SM-S931B": "Galaxy S25",
-    "SM-S936": "Galaxy S25+",
-    "SM-S936B": "Galaxy S25+",
-    "SM-S937": "Galaxy S25 Edge",
-    "SM-S937B": "Galaxy S25 Edge",
-    "SM-S938": "Galaxy S25 Ultra",
-    "SM-S938B": "Galaxy S25 Ultra"
+    // Pixel (exemplos)
+    "Pixel 8": "Pixel 8",
+    "Pixel 8 Pro": "Pixel 8 Pro"
 };
 
 /**
- * Converte um código de modelo (ex.: "SM-S711B") em um nome comercial (ex.: "Galaxy S23 FE")
- * usando o DEVICE_MODEL_MAP.
- *
- * Por que isso existe?
- * - Alguns navegadores devolvem o modelo com pequenas variações (ex.: "SM-S931B/DS").
- * - Aqui normalizamos para tentar encontrar no mapa sem você precisar duplicar chaves.
+ * Tenta extrair modelo de Android do user-agent.
+ * Em muitos Samsung aparece algo como: "SM-S711B" antes de "Build/".
  */
+function extractAndroidModelFromUA() {
+    const ua = navigator.userAgent || '';
+    const m = ua.match(/;\s*([A-Za-z0-9\-]+)\s+Build\//);
+    return m ? m[1] : '';
+}
+
+/** Normaliza e tenta mapear códigos como "SM-S931B/DS" → "SM-S931B" */
 function mapModelToCommercialName(modelRaw) {
-    if (!modelRaw) return "";
+    if (!modelRaw) return '';
+    const cleaned = String(modelRaw).trim();
 
-    // Normalização básica (iniciante-friendly):
-    // - transforma em maiúsculo
-    // - remove espaços
-    let normalized = String(modelRaw).toUpperCase().trim().replace(/\s+/g, "");
+    // tenta direto
+    if (DEVICE_MODEL_MAP[cleaned]) return DEVICE_MODEL_MAP[cleaned];
 
-    // Tenta direto
-    if (DEVICE_MODEL_MAP[normalized]) return DEVICE_MODEL_MAP[normalized];
+    // remove sufixos comuns (/DS)
+    const noSuffix = cleaned.replace(/\/.*/, '');
+    if (DEVICE_MODEL_MAP[noSuffix]) return DEVICE_MODEL_MAP[noSuffix];
 
-    // Remove variações comuns (Dual SIM costuma aparecer como "/DS")
-    normalized = normalized.replace(/\/DS$/i, "");
-    if (DEVICE_MODEL_MAP[normalized]) return DEVICE_MODEL_MAP[normalized];
-
-    // Às vezes aparece com sufixos longos (ex.: códigos de cor/mercado). Pegamos só o começo.
-    // Ex.: "SM-S936BLBJZTO" -> tentamos "SM-S936B" primeiro.
-    const maybeShort = normalized.match(/^SM-[A-Z0-9]+/i)?.[0] || normalized;
-    if (DEVICE_MODEL_MAP[maybeShort]) return DEVICE_MODEL_MAP[maybeShort];
-
-    // Se não achou no mapa, devolve o que veio do aparelho (melhor do que ficar vazio)
-    return modelRaw;
-}
-
-
-/** Tenta extrair uma marca a partir do User-Agent (melhor esforço). */
-function guessBrandFromUA(uaLower) {
-    if (/iphone|ipad|ipod/.test(uaLower)) return 'Apple';
-    // iPadOS às vezes se identifica como "Macintosh" no User-Agent
-    if (/macintosh/.test(uaLower) && (navigator.maxTouchPoints || 0) > 1) return 'Apple';
-    if (/samsung/.test(uaLower) || /\bsm-[a-z0-9]+\b/.test(uaLower)) return 'Samsung';
-    if (/pixel/.test(uaLower)) return 'Google';
-    if (/huawei|honor/.test(uaLower)) return 'Huawei';
-    if (/xiaomi|redmi|poco/.test(uaLower)) return 'Xiaomi';
-    if (/motorola|moto /.test(uaLower)) return 'Motorola';
-    if (/oneplus/.test(uaLower)) return 'OnePlus';
-    if (/asus/.test(uaLower)) return 'ASUS';
-    if (/sony/.test(uaLower)) return 'Sony';
-    if (/lg/.test(uaLower)) return 'LG';
-    return '';
-}
-
-/** Tenta extrair o "modelo" a partir do User-Agent (melhor esforço). */
-function guessModelFromUA(userAgent) {
-    // Muitos Android têm o padrão: "Android 14; SM-S711B Build/...."
-    const m1 = userAgent.match(/Android\s[\d\.]+;\s*([^;]+)\s*Build/i);
-    if (m1 && m1[1]) return m1[1].trim();
-
-    // Samsung: SM-XXXX explícito em vários UAs
-    const m2 = userAgent.match(/\bSM-[A-Z0-9]+\b/i);
-    if (m2 && m2[0]) return m2[0].toLocaleUpperCase('pt-BR');
-
-    // Google Pixel costuma vir como "Pixel 8" etc.
-    const m3 = userAgent.match(/\bPixel\s[\w\s]+?\b/i);
-    if (m3 && m3[0]) return m3[0].trim();
-
-    // iOS: não dá para saber o modelo (14/15/...) pelo UA
-    if (/iPhone/i.test(userAgent)) return 'iPhone';
-    if (/iPad/i.test(userAgent)) return 'iPad';
-    // iPadOS pode aparecer como Macintosh
-    if (/Macintosh/i.test(userAgent) && (navigator.maxTouchPoints || 0) > 1) return 'iPad';
+    // tenta achados diretos (ex.: "Pixel 8" vem como texto no UA)
+    for (const key of Object.keys(DEVICE_MODEL_MAP)) {
+        if (cleaned.toLowerCase().includes(key.toLowerCase())) {
+            return DEVICE_MODEL_MAP[key];
+        }
+    }
 
     return '';
 }
 
 /**
- * Retorna uma string com "Marca Modelo" quando disponível.
- * Ex.: "Samsung SM-S711B" ou "Google Pixel 8".
- * Pode retornar "" se não houver dados confiáveis.
+ * Retorna algo como:
+ * - "Samsung Galaxy S25" (se mapear)
+ * - "Samsung SM-S711B" (se não mapear)
+ * - "Apple iPhone" (iOS)
+ * - "Android" (fallback)
  */
-async function getDeviceBrandModelLabel() {
+function getBrandAndModel() {
     const ua = navigator.userAgent || '';
-    const uaLower = ua.toLowerCase();
 
-    // 1) Tenta pegar model via User-Agent Client Hints (Chrome/Edge modernos)
-    // Isso funciona bem em Android Chrome. No Safari iOS, geralmente não existe.
-    let modelFromHints = '';
-    try {
-        if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
-            const data = await navigator.userAgentData.getHighEntropyValues(['model', 'platform']);
-            if (data && data.model) modelFromHints = String(data.model).trim();
-        }
-    } catch (e) {
-        // Ignora: navegador não suporta ou bloqueou.
+    if (isIOS()) {
+        // Safari iOS não dá o modelo exato por privacidade
+        if (/iPad/.test(ua)) return "Apple iPad";
+        return "Apple iPhone";
     }
 
-    const brand = guessBrandFromUA(uaLower);
-    const modelRaw = modelFromHints || guessModelFromUA(ua);
+    if (isAndroid()) {
+        const rawModel = extractAndroidModelFromUA();
 
-    if (!brand && !modelRaw) return '';
+        // Tenta descobrir marca
+        let brand = "Android";
+        if (/samsung/i.test(ua) || /^SM-/.test(rawModel)) brand = "Samsung";
+        else if (/pixel/i.test(ua)) brand = "Google";
+        else if (/motorola|moto/i.test(ua)) brand = "Motorola";
+        else if (/xiaomi|redmi|poco/i.test(ua)) brand = "Xiaomi";
 
-    // Se existir um nome "bonito" no mapa, usamos.
-    const modelPretty = mapModelToCommercialName(modelRaw);
+        // nome comercial via mapa (quando possível)
+        const commercial = mapModelToCommercialName(rawModel || ua);
+        if (commercial) return `${brand} ${commercial}`;
 
-    // Monta texto final
-    if (brand && modelPretty) return `${brand} ${modelPretty}`.trim();
-    if (brand) return brand;
-    return modelPretty;
+        // fallback: mostra o código do modelo
+        if (rawModel) return `${brand} ${rawModel}`;
+        return brand;
+    }
+
+    return "Desktop";
 }
 
-// Exibe informação do dispositivo
-async function displayDeviceInfo() {
+// Mostrar badge do dispositivo
+function updateDeviceBadge() {
+    const badge = document.getElementById('device-info');
+    if (!badge) return;
+
     const device = detectDevice();
-    const deviceBadge = document.getElementById('device-info');
-    if (!deviceBadge) return;
+    badge.textContent = `${device.icon} ${capitalize(device.type)} - ${device.brandModel}`;
 
-    // Ex.: "Mobile - Samsung SM-S711B"
-    const tipo = device.type.charAt(0).toLocaleUpperCase('pt-BR') + device.type.slice(1);
-
-    // Busca marca/modelo (melhor esforço). Pode ser "" em alguns navegadores.
-    const brandModel = await getDeviceBrandModelLabel();
-
-    deviceBadge.textContent = `${device.icon} ${brandModel ? `${tipo} - ${brandModel}` : tipo}`;
-    deviceBadge.className = `device-badge ${device.type}`;
+    badge.className = `device-badge ${device.type}`;
 }
 
-// Detecta iOS
-function isIOS() {
-    return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+function capitalize(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-// Detecta Android
-function isAndroid() {
-    return /Android/i.test(navigator.userAgent);
+// ============================================================
+// ✅ Feedback (toast) simples para iniciantes
+// ============================================================
+let toastTimeout = null;
+
+function showToast(message) {
+    let toast = document.getElementById('toastMessage');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'toastMessage';
+        toast.style.position = 'fixed';
+        toast.style.left = '50%';
+        toast.style.bottom = '20px';
+        toast.style.transform = 'translateX(-50%)';
+        toast.style.background = 'rgba(0,0,0,0.85)';
+        toast.style.color = '#fff';
+        toast.style.padding = '12px 16px';
+        toast.style.borderRadius = '10px';
+        toast.style.fontSize = '14px';
+        toast.style.zIndex = '9999';
+        toast.style.maxWidth = '92vw';
+        toast.style.textAlign = 'center';
+        toast.style.lineHeight = '1.4';
+        document.body.appendChild(toast);
+    }
+
+    toast.textContent = message;
+    toast.style.display = 'block';
+
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => {
+        toast.style.display = 'none';
+    }, 3500);
 }
 
-// Vibração para feedback em dispositivos móveis
+// Vibração (mobile) — opcional
 function vibrateDevice(duration = 50) {
-    if ('vibrate' in navigator && detectDevice().type === 'mobile') {
-        navigator.vibrate(duration);
-    }
+    try {
+        if (navigator.vibrate) navigator.vibrate(duration);
+    } catch (e) { /* ignora */ }
 }
 
-// Formatar CPF
-function formatCPF(input) {
-    let value = input.value.replace(/\D/g, '');
-    
-    if (value.length > 11) {
-        value = value.slice(0, 11);
-    }
-    
-    if (value.length > 9) {
-        value = value.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
-    } else if (value.length > 6) {
-        value = value.replace(/(\d{3})(\d{3})(\d{1,3})/, '$1.$2.$3');
-    } else if (value.length > 3) {
-        value = value.replace(/(\d{3})(\d{1,3})/, '$1.$2');
-    }
-    
-    input.value = value;
+// ============================================================
+// ✅ Formatação e helpers para iniciantes
+// ============================================================
+
+/**
+ * Remove vírgula/ponto no final de um texto digitado.
+ * Isso evita que o usuário digite "UNIMED." e a pontuação fique dentro do negrito no PDF.
+ * O template do recibo já coloca as pontuações fora do negrito.
+ */
+function stripTrailingTemplatePunctuation(value) {
+    return String(value || '')
+        .replace(/[,\.\s]+$/g, '') // remove vírgula/ponto/espacos no fim
+        .trim();
 }
 
-// Formatar Valor
-function formatValor(input) {
-    let value = input.value.replace(/\D/g, '');
-    
-    if (value === '') {
-        input.value = '';
-        return;
-    }
-    
-    value = parseInt(value).toString();
-    
-    const length = value.length;
-    
-    if (length === 1) {
-        value = '0,0' + value;
-    } else if (length === 2) {
-        value = '0,' + value;
-    } else {
-        value = value.slice(0, -2) + ',' + value.slice(-2);
-    }
-    
-    value = value.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-    
-    input.value = value;
+/**
+ * Em PDF, queremos tudo em MAIÚSCULAS (como você pediu),
+ * preservando acentos (pt-BR).
+ */
+function toUpperPt(value) {
+    return String(value || '').toLocaleUpperCase('pt-BR');
 }
 
-// Alternar campos de responsável
+/**
+ * No texto do recibo, queremos evitar quebra feia "prestado da" no fim de linha.
+ * Para isso, juntamos preposições pequenas com a palavra seguinte, criando um "token" único:
+ * Ex: "da instrumentação" vira "da\u00A0instrumentação" (espaço não-quebrável)
+ */
+function gluePrepositions(text) {
+    const preps = ['da', 'de', 'do', 'das', 'dos', 'na', 'no', 'nas', 'nos', 'ao', 'aos', 'à', 'às'];
+    return String(text || '').split(' ').reduce((acc, word, idx, arr) => {
+        const prev = acc.length ? acc[acc.length - 1] : '';
+        // Se a palavra anterior for preposição, a gente cola com a palavra atual usando NBSP
+        if (preps.includes(prev.toLowerCase())) {
+            acc[acc.length - 1] = prev + '\u00A0' + word;
+            return acc;
+        }
+        acc.push(word);
+        return acc;
+    }, []).join(' ');
+}
+
+// ============================================================
+// ✅ Lógica do formulário + preview
+// ============================================================
+
 function toggleResponsavel() {
     const acompanhado = document.getElementById('acompanhado').checked;
     const responsavelGroup = document.getElementById('responsavel-group');
     const cpfLabel = document.getElementById('cpf-label');
-    
+
     if (acompanhado) {
         responsavelGroup.style.display = 'block';
         cpfLabel.textContent = 'CPF do Responsável:';
@@ -279,38 +419,57 @@ function toggleResponsavel() {
     updatePreview();
 }
 
-// Atualizar limite de dias baseado no mês
-function updateDayLimit() {
-    const mes = document.getElementById('mes').value;
-    const ano = parseInt(document.getElementById('ano').value);
-    const diaInput = document.getElementById('dia');
-    const diaAtual = parseInt(diaInput.value);
-    
-    const diasPorMes = {
-        'JANEIRO': 31, 'FEVEREIRO': 28, 'MARÇO': 31, 'ABRIL': 30,
-        'MAIO': 31, 'JUNHO': 30, 'JULHO': 31, 'AGOSTO': 31,
-        'SETEMBRO': 30, 'OUTUBRO': 31, 'NOVEMBRO': 30, 'DEZEMBRO': 31
-    };
-    
-    let maxDias = 31;
-    
-    if (mes && diasPorMes[mes]) {
-        maxDias = diasPorMes[mes];
-        
-        if (mes === 'FEVEREIRO' && ano) {
-            const bissexto = (ano % 4 === 0 && ano % 100 !== 0) || (ano % 400 === 0);
-            maxDias = bissexto ? 29 : 28;
-        }
+function formatCPF(input) {
+    let value = input.value.replace(/\D/g, '');
+    value = value.slice(0, 11);
+
+    value = value.replace(/(\d{3})(\d)/, '$1.$2');
+    value = value.replace(/(\d{3})(\d)/, '$1.$2');
+    value = value.replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+
+    input.value = value;
+}
+
+function formatValor(input) {
+    let value = input.value.replace(/\D/g, '');
+
+    if (!value) {
+        input.value = '';
+        return;
     }
-    
-    diaInput.max = maxDias;
-    
-    if (diaAtual > maxDias) {
-        diaInput.value = maxDias;
+
+    value = (parseInt(value, 10) / 100).toFixed(2);
+    value = value.replace('.', ',');
+    value = value.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+    input.value = value;
+}
+
+function updateDayLimit() {
+    const month = document.getElementById('mes').value;
+    const year = parseInt(document.getElementById('ano').value, 10);
+
+    const dayInput = document.getElementById('dia');
+    if (!month || !year) return;
+
+    const months31 = ['JANEIRO', 'MARÇO', 'MAIO', 'JULHO', 'AGOSTO', 'OUTUBRO', 'DEZEMBRO'];
+    const months30 = ['ABRIL', 'JUNHO', 'SETEMBRO', 'NOVEMBRO'];
+
+    let maxDay = 31;
+
+    if (months30.includes(month)) maxDay = 30;
+    if (month === 'FEVEREIRO') {
+        const isLeap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+        maxDay = isLeap ? 29 : 28;
+    }
+
+    dayInput.max = String(maxDay);
+
+    if (parseInt(dayInput.value, 10) > maxDay) {
+        dayInput.value = '';
     }
 }
 
-// Atualizar preview
 function updatePreview() {
     const acompanhado = document.getElementById('acompanhado').checked;
     const nomeResponsavel = document.getElementById('nome-responsavel').value.trim();
@@ -319,50 +478,57 @@ function updatePreview() {
     const valor = document.getElementById('valor').value.trim();
     const cirurgia = document.getElementById('cirurgia').value.trim();
     const hospital = document.getElementById('hospital').value.trim();
+
     const dia = document.getElementById('dia').value;
     const mes = document.getElementById('mes').value;
     const ano = document.getElementById('ano').value;
 
-    // Usamos versões "limpas" dos campos para evitar que vírgula/ponto FINAL do usuário
-    // entre no <strong> (negrito). A pontuação do template fica fora do negrito.
-    const nomeResponsavelClean = stripTrailingTemplatePunctuation(nomeResponsavel);
-    const nomeClean = stripTrailingTemplatePunctuation(nome);
-    const cpfClean = stripTrailingTemplatePunctuation(cpf);
-    const cirurgiaClean = stripTrailingTemplatePunctuation(cirurgia);
-    const hospitalClean = stripTrailingTemplatePunctuation(hospital);
+    let recebedor = nome || '********************************';
+    let cpfDisplay = cpf || '***.***.***-**';
+    let valDisplay = valor ? `R$ ${valor}` : 'R$ ***,**';
+    let cirDisplay = cirurgia || '*******************';
+    let hosDisplay = hospital || '**********';
 
-    
-    let textoRecibo = 'Recebi de ';
-    
+    // Remove pontuação final digitada (vírgula/ponto) — template cuida disso
+    recebedor = stripTrailingTemplatePunctuation(recebedor);
+    hosDisplay = stripTrailingTemplatePunctuation(hosDisplay);
+
+    // Texto do recibo (preview)
+    let text = '';
+
     if (acompanhado && nomeResponsavel) {
-        textoRecibo += '<strong>' + nomeResponsavelClean.toLocaleUpperCase('pt-BR') + '</strong>, responsável por <strong>' + 
-                      (nomeClean || '********************************') + '</strong>';
+        const respClean = stripTrailingTemplatePunctuation(nomeResponsavel);
+        text = `Recebi de <strong>${respClean}</strong>, <span>CPF.: </span><strong>${cpfDisplay}</strong>, o valor de <strong>${valDisplay}</strong> referente ao serviço prestado da instrumentação cirúrgica para cirurgia de <strong>${recebedor}</strong>, realizada no hospital <strong>${hosDisplay}</strong>.`;
     } else {
-        textoRecibo += '<strong>' + (nomeClean || '********************************') + '</strong>';
+        text = `Recebi de <strong>${recebedor}</strong>, <span>CPF.: </span><strong>${cpfDisplay}</strong>, o valor de <strong>${valDisplay}</strong> referente ao serviço prestado da instrumentação cirúrgica para cirurgia de <strong>${cirDisplay}</strong>, realizada no hospital <strong>${hosDisplay}</strong>.`;
     }
-    
-        // CPF: deixa o LABEL fora do negrito e coloca em negrito apenas o NÚMERO.
-    // A vírgula depois do CPF também fica fora do negrito (pedido seu).
-    textoRecibo += ', CPF.: <strong>' + (cpfClean || '***.***.***-**') + '</strong>,';
-    textoRecibo += ' o valor de <strong>R$ ' + (valor || '***,**') + '</strong>';
-    textoRecibo += ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ';
-    textoRecibo += '<strong>' + (cirurgiaClean || '*******************') + '</strong>';
-    textoRecibo += ', realizada no hospital <strong>' + (hospitalClean || '**********') + '</strong>.';
-    
-    document.getElementById('receipt-text').innerHTML = textoRecibo;
-    
-    const dataCompleta = dia && mes && ano 
-        ? dia + ' de ' + mes.charAt(0) + mes.slice(1).toLowerCase() + ' de ' + ano
-        : '** de ********** de ****';
-    
-    document.querySelector('.receipt-location').textContent = 'Juiz de Fora, ' + dataCompleta;
+
+    // Corrige casos de "da instrumentação"/"no hospital" grudarem visualmente (sem mexer no HTML original)
+    text = text.replace(/\bda\s+instrumentação\b/gi, 'da&nbsp;instrumentação');
+    text = text.replace(/\bno\s+hospital\b/gi, 'no&nbsp;hospital');
+
+    document.getElementById('receipt-text').innerHTML = text;
+
+    // Data no preview
+    const location = document.querySelector('.receipt-location');
+    if (dia && mes && ano) {
+        location.textContent = `Juiz de Fora, ${dia} de ${mes} de ${ano}`;
+    } else {
+        location.textContent = 'Juiz de Fora, ** de ********** de ****';
+    }
+
+    // Assinatura em negrito (preview)
+    const sigName = document.querySelector('.signature-name');
+    const sigCpf = document.querySelector('.signature-cpf');
+    if (sigName) sigName.innerHTML = `<strong>Daniela Ramos Oliveira</strong>`;
+    if (sigCpf) sigCpf.innerHTML = `<strong>CPF 088.959.546-10</strong>`;
 }
 
-// Mostrar modal
-function showModal() {
-    // try/catch para evitar que um erro inesperado impeça o modal de aparecer
-    try {
+// ============================================================
+// ✅ Modal de confirmação (antes de gerar PDF)
+// ============================================================
 
+function showModal() {
     const acompanhado = document.getElementById('acompanhado').checked;
     const nomeResponsavel = document.getElementById('nome-responsavel').value.trim();
     const cpf = document.getElementById('cpf').value.trim();
@@ -373,407 +539,441 @@ function showModal() {
     const dia = document.getElementById('dia').value;
     const mes = document.getElementById('mes').value;
     const ano = document.getElementById('ano').value;
-    
-    // Validação
-    if (!nome || !cpf || !valor || !cirurgia || !hospital || !dia || !mes || !ano) {
-        alert('Por favor, preencha todos os campos obrigatórios!');
-        vibrateDevice(200);
-        return;
-    }
-    
+
+    // Validações simples
     if (acompanhado && !nomeResponsavel) {
-        alert('Por favor, preencha o nome do responsável!');
-        vibrateDevice(200);
+        showToast('Preencha o nome do responsável.');
         return;
     }
-    
-    if (cpf.length !== 14) {
-        alert('Por favor, preencha o CPF completo!');
-        vibrateDevice(200);
+    if (!cpf || cpf.length < 11) {
+        showToast('Preencha o CPF corretamente.');
         return;
     }
-    
-    // Montar preview do modal
-        // Para evitar erro no modo "Acompanhado":
-    // O preview do modal usa uma versão "limpa" do nome do responsável
-    // (sem vírgula/ponto FINAL caso o usuário digite). Isso NÃO muda o que você digitou,
-    // apenas controla como exibimos no preview.
+    if (!nome) {
+        showToast('Preencha o nome do paciente.');
+        return;
+    }
+    if (!valor) {
+        showToast('Preencha o valor.');
+        return;
+    }
+    if (!cirurgia) {
+        showToast('Preencha o tipo de cirurgia.');
+        return;
+    }
+    if (!hospital) {
+        showToast('Preencha o hospital.');
+        return;
+    }
+    if (!dia || !mes || !ano) {
+        showToast('Preencha a data completa.');
+        return;
+    }
+
+    // “Limpa” pontuações finais digitadas
     const nomeResponsavelClean = stripTrailingTemplatePunctuation(nomeResponsavel);
+    const nomePacienteClean = stripTrailingTemplatePunctuation(nome);
 
-let previewHTML = '<p><strong>Paciente:</strong> ' + nome.toLocaleUpperCase('pt-BR') + '</p>';
-    
+    const modal = document.getElementById('confirmModal');
+    const modalPreview = document.getElementById('modal-preview');
+
     if (acompanhado) {
-        previewHTML += '<p><strong>Responsável:</strong> ' + nomeResponsavelClean.toLocaleUpperCase('pt-BR') + '</p>';
-        previewHTML += '<p><strong>CPF do Responsável:</strong> ' + cpf + '</p>';
+        modalPreview.innerHTML = `
+            <p><strong>Responsável:</strong> ${escapeHtml(nomeResponsavelClean)}</p>
+            <p><strong>CPF do Responsável:</strong> ${escapeHtml(cpf)}</p>
+            <p><strong>Paciente:</strong> ${escapeHtml(nomePacienteClean)}</p>
+            <p><strong>Valor:</strong> R$ ${escapeHtml(valor)}</p>
+            <p><strong>Cirurgia:</strong> ${escapeHtml(cirurgia)}</p>
+            <p><strong>Hospital:</strong> ${escapeHtml(hospital)}</p>
+            <p><strong>Data:</strong> ${escapeHtml(dia)} de ${escapeHtml(mes)} de ${escapeHtml(ano)}</p>
+        `;
     } else {
-        previewHTML += '<p><strong>CPF:</strong> ' + cpf + '</p>';
-    }
-    
-    previewHTML += '<p><strong>Valor:</strong> R$ ' + valor + '</p>';
-    previewHTML += '<p><strong>Tipo de Cirurgia:</strong> ' + cirurgia.toLocaleUpperCase('pt-BR') + '</p>';
-    previewHTML += '<p><strong>Hospital:</strong> ' + hospital.toLocaleUpperCase('pt-BR') + '</p>';
-    previewHTML += '<p><strong>Data:</strong> ' + dia + ' de ' + mes.charAt(0) + mes.slice(1).toLowerCase() + ' de ' + ano + '</p>';
-    
-    document.getElementById('modal-preview').innerHTML = previewHTML;
-    document.getElementById('confirmModal').style.display = 'block';
-    
-    vibrateDevice();
-
-    } catch (err) {
-        console.error('Erro ao abrir modal:', err);
-        const msg = err && err.message ? err.message : String(err);
-        if (typeof showToast === 'function') showToast('❌ Erro ao abrir o modal: ' + msg, 7000);
-        else alert('Erro ao abrir o modal: ' + msg);
-    }
-}
-
-// Fechar modal
-function closeModal() {
-    document.getElementById('confirmModal').style.display = 'none';
-    vibrateDevice();
-}
-
-// ============================================================
-// 📄 Modal de ações do PDF (para o usuário escolher o que fazer)
-// - Em muitos celulares (especialmente iPhone), o "download" não
-//   funciona como no PC. Então oferecemos escolhas claras.
-// ============================================================
-
-function ensurePdfActionModalExists() {
-    // Criamos o modal via JavaScript para NÃO precisar mexer no index.html
-    // (assim, você só substitui o script.js e pronto).
-    if (document.getElementById('pdfActionModal')) return;
-
-    const modal = document.createElement('div');
-    modal.id = 'pdfActionModal';
-    modal.className = 'modal';
-    modal.style.zIndex = '1100'; // fica acima do confirmModal
-
-    modal.innerHTML = `
-        <div class="modal-content">
-            <h2>PDF gerado! O que você quer fazer?</h2>
-            <div id="pdf-action-hint" style="margin-bottom: 14px; line-height: 1.5; color: #333;"></div>
-            <div class="modal-buttons" id="pdf-action-buttons"></div>
-            <div id="pdf-action-fallback" style="margin-top: 10px; font-size: 13px; color: #555;"></div>
-        </div>
-    `;
-    document.body.appendChild(modal);
-}
-
-function openPdfPreviewFromBlob(blob) {
-    // Abre o PDF em uma nova aba (preview).
-    // Como isso é chamado a partir de um clique do usuário, o navegador tende a permitir.
-    const url = URL.createObjectURL(blob);
-    const opened = window.open(url, '_blank');
-
-    // Se o navegador bloquear popup, mostramos um link manual.
-    if (!opened) {
-        const fallback = document.getElementById('pdf-action-fallback');
-        if (fallback) {
-            fallback.innerHTML = `
-                O navegador bloqueou a abertura automática. Toque aqui para abrir:
-                <br><a href="${url}" target="_blank" rel="noopener"><strong>Abrir PDF</strong></a>
-            `;
-        } else {
-            showToast('Popup bloqueado. Procure um link de "Abrir PDF" na tela.');
-        }
-    }
-
-    // Revoga depois de um tempo para liberar memória.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-
-    // ✅ Retornamos se conseguiu abrir automaticamente.
-    return !!opened;
-}
-
-function downloadBlobAsFile(blob, fileName) {
-    // Faz o download do blob criando um link temporário.
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName; // sugere o nome do arquivo ao sistema
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
-function closePdfActionModal() {
-    const modal = document.getElementById('pdfActionModal');
-    if (modal) modal.style.display = 'none';
-    // limpamos fallback também
-    const fallback = document.getElementById('pdf-action-fallback');
-    if (fallback) fallback.innerHTML = '';
-}
-
-function showPdfActionModal() {
-    ensurePdfActionModalExists();
-
-    const modal = document.getElementById('pdfActionModal');
-    const hint = document.getElementById('pdf-action-hint');
-    const buttons = document.getElementById('pdf-action-buttons');
-    const fallback = document.getElementById('pdf-action-fallback');
-
-    if (!lastGeneratedPDF || !lastGeneratedPDF.blob) {
-        showToast('❌ Nenhum PDF encontrado para abrir/baixar. Gere novamente.');
-        return;
-    }
-
-    // Limpa conteúdo anterior
-    if (fallback) fallback.innerHTML = '';
-    if (buttons) buttons.innerHTML = '';
-
-    const { blob, fileName } = lastGeneratedPDF;
-
-    // Texto explicativo muda conforme o sistema
-    if (hint) {
-        if (isIOS()) {
-            hint.innerHTML = `
-                No iPhone/iPad, o "download" é diferente do PC.<br>
-                Você pode <strong>abrir</strong> o PDF para visualizar, ou <strong>compartilhar/salvar</strong>
-                (ex.: "Salvar em Arquivos", WhatsApp, etc.).
-            `;
-        } else {
-            hint.innerHTML = `
-                Você quer <strong>baixar e abrir</strong> o PDF, ou <strong>apenas abrir</strong> para visualizar?
-            `;
-        }
-    }
-
-    // Botões
-    if (buttons) {
-        if (isIOS()) {
-            // iOS: "Compartilhar/Salvar" e "Apenas abrir"
-            const btnShare = document.createElement('button');
-            btnShare.className = 'btn-confirm';
-            btnShare.textContent = 'Compartilhar / Salvar';
-            btnShare.onclick = async () => {
-                try {
-                    await entregarPDFNoIOS(blob, fileName);
-                } finally {
-                    closePdfActionModal();
-                }
-            };
-
-            const btnOpen = document.createElement('button');
-            btnOpen.className = 'btn-cancel';
-            btnOpen.textContent = 'Apenas abrir';
-            btnOpen.onclick = () => {
-                const ok = openPdfPreviewFromBlob(blob);
-                // Se o popup foi bloqueado, deixamos o modal aberto para o usuário tocar no link.
-                if (ok) closePdfActionModal();
-                else showToast('Popup bloqueado: use o link "Abrir PDF" no modal.', 6000);
-            };
-
-            buttons.appendChild(btnOpen);
-            buttons.appendChild(btnShare);
-
-        } else {
-            // Android/Desktop: "Baixar e abrir" e "Apenas abrir"
-            const btnDownloadOpen = document.createElement('button');
-            btnDownloadOpen.className = 'btn-confirm';
-            btnDownloadOpen.textContent = 'Baixar e abrir';
-            btnDownloadOpen.onclick = () => {
-                downloadBlobAsFile(blob, fileName);
-                // Abrimos o preview também (em outra aba) – isso atende seu pedido:
-                // "abrir assim que baixar".
-                const ok = openPdfPreviewFromBlob(blob);
-                if (ok) {
-                    showToast('✅ Download iniciado e PDF aberto em nova aba.');
-                    closePdfActionModal();
-                } else {
-                    showToast('✅ Download iniciado. Popup bloqueado: use o link "Abrir PDF" no modal.', 7000);
-                    // Mantém o modal aberto para o usuário tocar no link.
-                }
-            };
-
-            const btnOpenOnly = document.createElement('button');
-            btnOpenOnly.className = 'btn-cancel';
-            btnOpenOnly.textContent = 'Apenas abrir';
-            btnOpenOnly.onclick = () => {
-                const ok = openPdfPreviewFromBlob(blob);
-                if (ok) {
-                    showToast('✅ PDF aberto em nova aba.');
-                    closePdfActionModal();
-                } else {
-                    showToast('Popup bloqueado: use o link "Abrir PDF" no modal.', 6000);
-                    // Mantém o modal aberto para o usuário tocar no link.
-                }
-            };
-
-            // Opcional: botão cancelar para fechar o modal
-            const btnCancel = document.createElement('button');
-            btnCancel.className = 'btn-cancel';
-            btnCancel.textContent = 'Cancelar';
-            btnCancel.onclick = () => closePdfActionModal();
-
-            buttons.appendChild(btnOpenOnly);
-            buttons.appendChild(btnDownloadOpen);
-            buttons.appendChild(btnCancel);
-        }
-    }
-
-    modal.style.display = 'block';
-}
-
-
-// Gerar PDF
-
-// ============================================================================
-// ✅ NOVO: Toast (mensagem discreta) - melhor que alert() no mobile
-// ----------------------------------------------------------------------------
-// Por que isso existe?
-// - No celular, "alert()" é chato e pode até atrapalhar o fluxo (principalmente no iPhone).
-// - Um "toast" é só uma mensagem pequena que some sozinha.
-//
-// Observação: isso NÃO muda nada no PDF. É só um feedback para o usuário.
-// ============================================================================
-function showToast(message, duration = 2500) {
-    try {
-        let toast = document.getElementById('toast');
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.id = 'toast';
-
-            // Estilos inline para não depender do CSS do projeto.
-            toast.style.position = 'fixed';
-            toast.style.left = '50%';
-            toast.style.bottom = '24px';
-            toast.style.transform = 'translateX(-50%)';
-            toast.style.background = 'rgba(0,0,0,0.85)';
-            toast.style.color = '#fff';
-            toast.style.padding = '10px 14px';
-            toast.style.borderRadius = '10px';
-            toast.style.fontSize = '14px';
-            toast.style.zIndex = '9999';
-            toast.style.maxWidth = '90vw';
-            toast.style.textAlign = 'center';
-            toast.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
-            toast.style.opacity = '0';
-            toast.style.transition = 'opacity 150ms ease';
-
-            document.body.appendChild(toast);
-        }
-
-        toast.textContent = message;
-        toast.style.opacity = '1';
-
-        clearTimeout(window.__toastTimer);
-        window.__toastTimer = setTimeout(() => {
-            toast.style.opacity = '0';
-        }, duration);
-    } catch (e) {
-        // Se algo der errado (muito raro), não travamos o app.
-        console.log('Toast falhou:', e);
-    }
-}
-
-// ============================================================================
-// ✅ NOVO (robustez): Captura erros de JavaScript e mostra uma mensagem na tela
-// ----------------------------------------------------------------------------
-// Por que isso importa?
-// - Se algum detalhe do navegador bloquear algo (ex.: jsPDF não carregou, popup bloqueado, etc.),
-//   o usuário "vê nada acontecer".
-// - Com isso, você sempre recebe um feedback visual e dá para depurar mais fácil.
-// ============================================================================
-(function installGlobalErrorHandlers() {
-    // Evita instalar duas vezes (segurança)
-    if (window.__receiptErrorHandlersInstalled) return;
-    window.__receiptErrorHandlersInstalled = true;
-
-    window.addEventListener('error', function (ev) {
-        try {
-            const msg = ev && ev.message ? ev.message : 'Erro inesperado.';
-            console.error('Erro JS:', ev);
-            if (typeof showToast === 'function') showToast('❌ Erro: ' + msg, 6000);
-            else alert('Erro: ' + msg);
-        } catch (_) { /* silencioso */ }
-    });
-
-    window.addEventListener('unhandledrejection', function (ev) {
-        try {
-            const msg = ev && ev.reason ? (ev.reason.message || String(ev.reason)) : 'Erro inesperado.';
-            console.error('Promise rejeitada:', ev);
-            if (typeof showToast === 'function') showToast('❌ Erro: ' + msg, 6000);
-            else alert('Erro: ' + msg);
-        } catch (_) { /* silencioso */ }
-    });
-})();
-
-
-// ============================================================================
-// ✅ NOVO: Entregar o PDF no iPhone (iOS)
-// ----------------------------------------------------------------------------
-// Por que precisamos disso?
-// - No iPhone (Safari), downloads são "estranhos": às vezes não abre nada, ou o usuário
-//   não sabe onde foi parar.
-// - A melhor UX no iOS é abrir o menu "Compartilhar" (Salvar em Arquivos, WhatsApp, etc.).
-// - Se o dispositivo não suportar isso, abrimos um preview em nova aba.
-// - Se o Safari bloquear popup, mostramos um botão "Abrir PDF" na própria tela.
-// ============================================================================
-async function entregarPDFNoIOS(pdfBlob, filename) {
-    try {
-        const file = new File([pdfBlob], filename, { type: 'application/pdf' });
-
-        // iOS moderno (e alguns outros navegadores) suportam Web Share com arquivos.
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({
-                files: [file],
-                title: 'Recibo',
-                text: 'PDF do recibo gerado. Você pode salvar em Arquivos ou compartilhar.'
-            });
-            return;
-        }
-    } catch (e) {
-        // Se o usuário cancelar, ou se não suportar, seguimos para o fallback.
-    }
-
-    // Fallback: abrir preview em outra aba
-    const url = URL.createObjectURL(pdfBlob);
-    const opened = window.open(url, '_blank');
-
-    // Se o popup foi bloqueado (muito comum no Safari), mostramos um link na tela.
-    if (!opened) {
-        let box = document.getElementById('pdfLinkBox');
-        if (!box) {
-            box = document.createElement('div');
-            box.id = 'pdfLinkBox';
-
-            box.style.marginTop = '16px';
-            box.style.padding = '14px';
-            box.style.border = '2px solid #667eea';
-            box.style.borderRadius = '10px';
-            box.style.background = '#f8f9ff';
-            box.style.textAlign = 'center';
-
-            // Coloca o aviso no topo do container (onde fica o formulário)
-            const container = document.querySelector('.container');
-            if (container) container.prepend(box);
-            else document.body.prepend(box);
-        }
-
-        box.innerHTML = `
-            <strong>📄 PDF gerado!</strong><br><br>
-            <a href="${url}" target="_blank" style="font-size:16px; font-weight:bold;">
-                👉 Toque aqui para abrir o PDF
-            </a>
-            <div style="margin-top:10px; font-size:13px; color:#555;">
-                No iPhone: após abrir, toque em <strong>Compartilhar</strong> → <strong>Salvar em Arquivos</strong>
-            </div>
+        modalPreview.innerHTML = `
+            <p><strong>Paciente:</strong> ${escapeHtml(nomePacienteClean)}</p>
+            <p><strong>CPF:</strong> ${escapeHtml(cpf)}</p>
+            <p><strong>Valor:</strong> R$ ${escapeHtml(valor)}</p>
+            <p><strong>Cirurgia:</strong> ${escapeHtml(cirurgia)}</p>
+            <p><strong>Hospital:</strong> ${escapeHtml(hospital)}</p>
+            <p><strong>Data:</strong> ${escapeHtml(dia)} de ${escapeHtml(mes)} de ${escapeHtml(ano)}</p>
         `;
     }
 
-    // Limpa a URL depois de um tempo (boa prática).
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    modal.style.display = 'block';
+    vibrateDevice(50);
 }
 
-// ============================================================================
-// ✅ NOVO: Preencher automaticamente o ANO com o ano atual do dispositivo
-// ----------------------------------------------------------------------------
-// Pedido seu: quando abrir a página, o campo "Ano" deve vir com o ano atual,
-// mas você ainda pode alterar manualmente (o select continua livre).
-// ============================================================================
+function closeModal() {
+    const modal = document.getElementById('confirmModal');
+    modal.style.display = 'none';
+}
+
+// ============================================================
+// ✅ PDF (jsPDF) — geração final
+// ============================================================
+
+// ---- Funções de quebra/medição de texto no PDF (simplificadas e seguras) ----
+function mmToPt(mm) {
+    return mm * 2.834645669;
+}
+
+function safeGetTextWidth(doc, txt) {
+    // jsPDF trabalha com unidades em mm aqui (doc.internal.scaleFactor já ajuda),
+    // mas getTextWidth funciona bem se fonte estiver setada.
+    return doc.getTextWidth(txt);
+}
+
+/**
+ * Renderiza texto com "tokens" (partes normais e partes em negrito),
+ * quebrando linhas conforme a largura disponível.
+ *
+ * Também implementa:
+ * - “CPF não-quebrável”: o bloco "CPF.: 111...,", se não couber, vai inteiro pra próxima linha.
+ * - Anti-órfãos: evita terminar a linha com "da/de/do..." (quando possível).
+ */
+function drawRichText(doc, tokens, x, y, maxWidth, lineHeight, options = {}) {
+    const lines = [];
+    let currentLine = [];
+    let currentWidth = 0;
+
+    const orphanWords = new Set(['da', 'de', 'do', 'das', 'dos', 'na', 'no', 'nas', 'nos', 'ao', 'aos', 'à', 'às']);
+
+    // Agrupador: tenta colocar tokens que têm group igual juntos
+    function measureToken(token) {
+        doc.setFont('helvetica', token.bold ? 'bold' : 'normal');
+        doc.setFontSize(token.size || 12);
+        return safeGetTextWidth(doc, token.text);
+    }
+
+    function flushLine() {
+        if (currentLine.length) lines.push(currentLine);
+        currentLine = [];
+        currentWidth = 0;
+    }
+
+    function canFit(tokenWidth) {
+        return currentWidth + tokenWidth <= maxWidth;
+    }
+
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+
+        // Tokens com group: juntamos todos os tokens do mesmo grupo num “bloco” não-quebrável
+        if (token.group) {
+            const groupName = token.group;
+            const groupTokens = [token];
+            let j = i + 1;
+            while (j < tokens.length && tokens[j].group === groupName) {
+                groupTokens.push(tokens[j]);
+                j++;
+            }
+
+            const groupWidth = groupTokens.reduce((sum, tk) => sum + measureToken(tk), 0);
+
+            if (!canFit(groupWidth) && currentLine.length > 0) {
+                flushLine();
+            }
+
+            // Se mesmo na linha vazia não couber, colocamos do mesmo jeito (quebra inevitável)
+            groupTokens.forEach(tk => {
+                currentLine.push(tk);
+                currentWidth += measureToken(tk);
+            });
+
+            i = j - 1;
+            continue;
+        }
+
+        const w = measureToken(token);
+
+        // Anti-órfãos: se a linha ficaria terminando com "da/de/do", tentamos empurrar
+        if (token.text.trim().length > 0 && orphanWords.has(token.text.trim().toLowerCase())) {
+            const next = tokens[i + 1];
+            if (next) {
+                const combinedWidth = w + measureToken(next);
+                // se a preposição + próxima palavra não cabem, quebra antes da preposição
+                if (!canFit(combinedWidth) && currentLine.length > 0) {
+                    flushLine();
+                }
+            }
+        }
+
+        if (!canFit(w) && currentLine.length > 0) {
+            flushLine();
+        }
+
+        currentLine.push(token);
+        currentWidth += w;
+    }
+
+    flushLine();
+
+    // Desenhar
+    let cursorY = y;
+    for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+
+        // Se for a primeira linha e options.centerFirstLine = true, centraliza
+        let cursorX = x;
+        if (li === 0 && options.centerFirstLine) {
+            const lineWidth = line.reduce((sum, tk) => sum + measureToken(tk), 0);
+            cursorX = x + (maxWidth - lineWidth) / 2;
+        }
+
+        for (const tk of line) {
+            doc.setFont('helvetica', tk.bold ? 'bold' : 'normal');
+            doc.setFontSize(tk.size || 12);
+            doc.text(tk.text, cursorX, cursorY);
+            cursorX += measureToken(tk);
+        }
+
+        cursorY += lineHeight;
+    }
+
+    return { linesCount: lines.length, endY: cursorY };
+}
+
+// ----------------- Geração do PDF -----------------
+async function generatePDF() {
+    
+    // ✅ Segurança: garante que a biblioteca jsPDF carregou (em Safari/iOS pode falhar se estiver offline)
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+        showToast('Erro: a biblioteca jsPDF não carregou. Verifique sua internet e recarregue a página.');
+        return;
+    }
+vibrateDevice(100);
+
+    const { jsPDF } = window.jspdf;
+
+    // ✅ Importante: definimos explicitamente A4 e unidade em mm
+    // para a formatação bater com o modelo (independente do dispositivo).
+    const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+
+    // ====== Coleta dos dados do formulário ======
+    const acompanhado = document.getElementById('acompanhado').checked;
+    const nomeResponsavel = document.getElementById('nome-responsavel').value.trim();
+    const cpf = document.getElementById('cpf').value.trim();
+    const nome = document.getElementById('nome').value.trim();
+    const valor = document.getElementById('valor').value.trim();
+    const cirurgia = document.getElementById('cirurgia').value.trim();
+    const hospital = document.getElementById('hospital').value.trim();
+    const dia = document.getElementById('dia').value;
+    const mes = document.getElementById('mes').value;
+    const ano = document.getElementById('ano').value;
+
+    // ====== Sanitização (remove pontuação final digitada) ======
+    const nomeRespClean = stripTrailingTemplatePunctuation(nomeResponsavel);
+    const nomeClean = stripTrailingTemplatePunctuation(nome);
+    const cirurgiaClean = stripTrailingTemplatePunctuation(cirurgia);
+    const hospitalClean = stripTrailingTemplatePunctuation(hospital);
+
+    // ====== CAIXA ALTA no PDF (conforme pedido) ======
+    const nomeRespUpper = toUpperPt(nomeRespClean);
+    const nomeUpper = toUpperPt(nomeClean);
+    const cirurgiaUpper = toUpperPt(cirurgiaClean);
+    const hospitalUpper = toUpperPt(hospitalClean);
+
+    // ====== Layout base ======
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    // Margens e medidas
+    const marginX = 22;            // margem esquerda/direita
+    const maxWidth = pageWidth - (marginX * 2);
+    const titleSize = 16;
+    const bodySize = 12;
+    const lineHeight = 7;          // espaçamento de linha no PDF
+
+    // ====== Tokens do texto (negrito só onde deve) ======
+    // Observação importante para iniciantes:
+    // - Cada "token" é um pedaço de texto.
+    // - Quando token.bold = true, ele sai em negrito.
+    // - Pontuações do TEMPLATE (vírgula/ponto fora do campo) ficam em token normal.
+    // - Pontuações que fazem parte do valor digitado (ex.: "013.989.296-62") ficam dentro do token em negrito.
+    let tokens = [];
+
+    // Recuo (pequeno espaço no início do primeiro parágrafo)
+    tokens.push({ text: '   ', bold: false, size: bodySize });
+
+    if (acompanhado && nomeRespUpper) {
+        // "Recebi de <RESP>, CPF.: <CPF>, o valor de <R$...> referente ... para cirurgia de <PACIENTE>, ... no hospital <HOSPITAL>."
+        tokens.push({ text: 'Recebi de ', bold: false, size: bodySize });
+        tokens.push({ text: nomeRespUpper, bold: true, size: bodySize });
+        tokens.push({ text: ', ', bold: false, size: bodySize });
+
+        // CPF.: (sem negrito) + número em negrito + vírgula sem negrito
+        tokens.push({ text: 'CPF.: ', bold: false, size: bodySize, group: 'cpf' });
+        tokens.push({ text: cpf, bold: true, size: bodySize, group: 'cpf' });
+        tokens.push({ text: ', ', bold: false, size: bodySize, group: 'cpf' });
+
+        tokens.push({ text: 'o valor de ', bold: false, size: bodySize });
+        tokens.push({ text: `R$ ${valor}`, bold: true, size: bodySize });
+        tokens.push({ text: ' referente ao serviço prestado ', bold: false, size: bodySize });
+
+        // Evita "da" grudando / quebrando feio
+        const trecho = gluePrepositions('da instrumentação cirúrgica para cirurgia de ');
+        tokens.push({ text: trecho + ' ', bold: false, size: bodySize });
+
+        tokens.push({ text: nomeUpper, bold: true, size: bodySize });
+        tokens.push({ text: ', realizada ', bold: false, size: bodySize });
+
+        const trecho2 = gluePrepositions('no hospital ');
+        tokens.push({ text: trecho2 + ' ', bold: false, size: bodySize });
+
+        tokens.push({ text: hospitalUpper, bold: true, size: bodySize });
+        tokens.push({ text: '.', bold: false, size: bodySize });
+    } else {
+        tokens.push({ text: 'Recebi de ', bold: false, size: bodySize });
+        tokens.push({ text: nomeUpper, bold: true, size: bodySize });
+        tokens.push({ text: ', ', bold: false, size: bodySize });
+
+        tokens.push({ text: 'CPF.: ', bold: false, size: bodySize, group: 'cpf' });
+        tokens.push({ text: cpf, bold: true, size: bodySize, group: 'cpf' });
+        tokens.push({ text: ', ', bold: false, size: bodySize, group: 'cpf' });
+
+        tokens.push({ text: 'o valor de ', bold: false, size: bodySize });
+        tokens.push({ text: `R$ ${valor}`, bold: true, size: bodySize });
+        tokens.push({ text: ' referente ao serviço prestado ', bold: false, size: bodySize });
+
+        const trecho = gluePrepositions('da instrumentação cirúrgica para cirurgia de ');
+        tokens.push({ text: trecho + ' ', bold: false, size: bodySize });
+
+        tokens.push({ text: cirurgiaUpper, bold: true, size: bodySize });
+        tokens.push({ text: ', realizada ', bold: false, size: bodySize });
+
+        const trecho2 = gluePrepositions('no hospital ');
+        tokens.push({ text: trecho2 + ' ', bold: false, size: bodySize });
+
+        tokens.push({ text: hospitalUpper, bold: true, size: bodySize });
+        tokens.push({ text: '.', bold: false, size: bodySize });
+    }
+
+    // ====== Calcula se CPF cabe na primeira linha junto do número e vírgula ======
+    // Se NÃO couber, centralizamos a 1ª linha e jogamos o bloco CPF para a 2ª.
+    // (Isso acontece só quando o "CPF.: 111..., " não couber inteiro.)
+    const cpfGroupText = `CPF.: ${cpf}, `;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(bodySize);
+
+    // Estimativa do começo do texto na primeira linha:
+    // "   Recebi de " + nomeUpper + ", "
+    const firstLinePrefix = acompanhado ? `   Recebi de ${nomeRespUpper}, ` : `   Recebi de ${nomeUpper}, `;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(bodySize);
+    const prefixWidth = doc.getTextWidth(firstLinePrefix);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(bodySize);
+    const cpfLabelWidth = doc.getTextWidth('CPF.: ');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(bodySize);
+    const cpfNumWidth = doc.getTextWidth(cpf);
+    doc.setFont('helvetica', 'normal');
+    const cpfCommaWidth = doc.getTextWidth(', ');
+
+    const cpfTotalWidth = cpfLabelWidth + cpfNumWidth + cpfCommaWidth;
+
+    const centerFirstLine = (prefixWidth + cpfTotalWidth) > maxWidth;
+
+    // ====== Construção vertical (centralizar top/bottom) ======
+    // Para centralização vertical, calculamos a altura total do bloco:
+    // título + espaço + linhas do corpo + espaço + data + espaço + assinatura
+    const titleHeight = 10;
+    const afterTitleSpace = 10;
+    const afterBodySpace = 12;
+    const afterDateSpace = 16;
+    const signatureLineHeight = 6;
+
+    // Para calcular quantas linhas o corpo vai usar, rodamos o drawRichText em "modo medição":
+    // (aqui a gente chama uma vez e usa o retorno de linesCount)
+    // Começamos em y=0 só pra medir
+    const measurement = drawRichText(doc, tokens, marginX, 0, maxWidth, lineHeight, { centerFirstLine });
+
+    const bodyLines = measurement.linesCount;
+    const bodyHeight = bodyLines * lineHeight;
+
+    const dateHeight = 7;
+    const signatureHeight = signatureLineHeight * 2;
+
+    const totalContentHeight =
+        titleHeight +
+        afterTitleSpace +
+        bodyHeight +
+        afterBodySpace +
+        dateHeight +
+        afterDateSpace +
+        signatureHeight;
+
+    const yStart = Math.max(18, (pageHeight - totalContentHeight) / 2);
+
+    // ====== Desenho final ======
+
+    // Título
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(titleSize);
+    doc.text('RECIBO', pageWidth / 2, yStart, { align: 'center' });
+
+    // Corpo
+    const bodyY = yStart + titleHeight + afterTitleSpace;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(bodySize);
+
+    const bodyDraw = drawRichText(doc, tokens, marginX, bodyY, maxWidth, lineHeight, { centerFirstLine });
+
+    // Data (à esquerda, como no modelo)
+    const dateY = bodyDraw.endY + afterBodySpace;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(bodySize);
+
+    // Mês em CAIXA ALTA já vem do select (JANEIRO, FEVEREIRO, etc.)
+    doc.text(`Juiz de Fora, ${dia} de ${mes} de ${ano}`, marginX, dateY);
+
+    // Assinatura (em negrito, como pedido)
+    const sigY = dateY + afterDateSpace;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(bodySize);
+    doc.text('Daniela Ramos Oliveira', pageWidth / 2, sigY, { align: 'center' });
+    doc.text('CPF 088.959.546-10', pageWidth / 2, sigY + signatureLineHeight, { align: 'center' });
+
+    // Nome do arquivo
+    const nomeArquivo = (() => {
+        const nomeBase = nomeUpper
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos p/ nome de arquivo
+            .replace(/[^\w\s-]/g, '')
+            .trim()
+            .replace(/\s+/g, '_')
+            .slice(0, 40) || 'RECIBO';
+
+        const diaPad = String(dia).padStart(2, '0');
+        const mesName = String(mes || 'MES').toUpperCase();
+        const anoPad = String(ano);
+
+        return `Recibo_${nomeBase}_${diaPad}-${mesName}-${anoPad}.pdf`;
+    })();
+
+    // ====== Depois de gerar: mostramos opções (Abrir / Baixar e abrir / Compartilhar no iOS) ======
+    const pdfBlob = doc.output('blob');
+
+    // Guardamos o último PDF (útil para debug e possíveis melhorias futuras)
+    lastGeneratedPDF = { blob: pdfBlob, fileName: nomeArquivo };
+
+    // Mostra um modal com as opções para o usuário
+    showPdfOptionsModal(pdfBlob, nomeArquivo);
+
+    closeModal();
+    vibrateDevice(200);
+}
+
+// Fechar modal ao clicar fora (modal de confirmação)
+window.onclick = function(event) {
+    const modal = document.getElementById('confirmModal');
+    if (event.target === modal) {
+        closeModal();
+    }
+};
+
+// ============================================================
+// ✅ Ano padrão do dispositivo (sem tirar opção de alterar)
+// ============================================================
 function setAnoPadraoDoDispositivo() {
     const anoSelect = document.getElementById('ano');
     if (!anoSelect) return;
@@ -790,588 +990,15 @@ function setAnoPadraoDoDispositivo() {
         anoSelect.appendChild(opt);
     }
 
+    // Define como selecionado
     anoSelect.value = anoAtual;
-
-    // Se o mês já estiver escolhido, isso ajuda a ajustar fevereiro (bissexto).
-    updateDayLimit();
 }
 
-// Deixa a assinatura do PREVIEW em negrito (somente a assinatura).
-// Isso não afeta o PDF (o PDF tem sua própria formatação).
-function aplicarNegritoAssinaturaPreview() {
-    const nameEl = document.querySelector('.signature-name');
-    const cpfEl = document.querySelector('.signature-cpf');
-    if (nameEl) nameEl.style.fontWeight = 'bold';
-    if (cpfEl) cpfEl.style.fontWeight = 'bold';
-}
-
-
-// ============================================================================
-// ✅ NOVO: Texto do recibo com negrito (sem "grudar" palavras)
-// ----------------------------------------------------------------------------
-// A ideia aqui é desenhar o texto "na mão" porque o jsPDF não faz negrito no meio
-// do parágrafo automaticamente.
-//
-// Também adicionamos 2 melhorias pedidas por você:
-// 1) Se "CPF.: 111...-11," não couber no final da primeira linha, jogamos TODO esse
-//    bloco para a segunda linha, e centralizamos a primeira linha.
-// 2) Evitamos que uma linha termine com palavrinhas "da/de/do/no..." (fica feio),
-//    movendo essa palavra para a linha seguinte quando possível.
-// ============================================================================
-function buildReceiptSegments({ acompanhado, nomeResponsavel, cpf, nome, valor, cirurgia, hospital }) {
-    // "Limpeza" para evitar pontuação FINAL entrar no negrito.
-    // Ex.: nome digitado como "JOÃO," -> a vírgula não deve ficar em negrito.
-    const responsavelClean = stripTrailingTemplatePunctuation(nomeResponsavel);
-    const pacienteClean = stripTrailingTemplatePunctuation(nome);
-    const cpfClean = stripTrailingTemplatePunctuation(cpf);
-    const cirurgiaClean = stripTrailingTemplatePunctuation(cirurgia);
-    const hospitalClean = stripTrailingTemplatePunctuation(hospital);
-
-    const responsavel = (responsavelClean || '').toLocaleUpperCase('pt-BR');
-    const paciente = (pacienteClean || '').toLocaleUpperCase('pt-BR');
-    const cirurgiaUp = (cirurgiaClean || '').toLocaleUpperCase('pt-BR');
-    const hospitalUp = (hospitalClean || '').toLocaleUpperCase('pt-BR');
-
-    // "group: 'cpfBlock'" = nosso "bloco não-quebrável" (CPF + número + vírgula).
-    // Assim evitamos: "CPF.:" no fim da linha e o número sozinho na linha de baixo.
-    const cpfBlock = [
-        { text: 'CPF.: ', style: 'normal', group: 'cpfBlock' },
-        { text: cpfClean, style: 'bold', group: 'cpfBlock' },
-        { text: ',', style: 'normal', group: 'cpfBlock' }
-    ];
-
-    if (acompanhado) {
-        return [
-            { text: 'Recebi de ', style: 'normal' },
-            { text: responsavel, style: 'bold' },
-            { text: ',', style: 'normal' },
-            { text: ' ', style: 'normal' }, // espaço que some automaticamente se cair no início de uma nova linha
-
-            ...cpfBlock,
-
-            { text: ' responsável de ', style: 'normal' },
-            { text: paciente, style: 'bold' },
-
-            { text: ' o valor de R$ ', style: 'normal' },
-            { text: valor, style: 'bold' },
-
-            { text: ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ', style: 'normal' },
-            { text: cirurgiaUp, style: 'bold' },
-
-            { text: ' realizada no hospital ', style: 'normal' },
-            { text: hospitalUp, style: 'bold' },
-            { text: '.', style: 'normal' }
-        ];
-    }
-
-    // Não acompanhado
-    return [
-        { text: 'Recebi de ', style: 'normal' },
-        { text: paciente, style: 'bold' },
-        { text: ',', style: 'normal' },
-        { text: ' ', style: 'normal' },
-
-        ...cpfBlock,
-
-        { text: ' o valor de R$ ', style: 'normal' },
-        { text: valor, style: 'bold' },
-
-        { text: ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ', style: 'normal' },
-        { text: cirurgiaUp, style: 'bold' },
-
-        { text: ' realizada no hospital ', style: 'normal' },
-        { text: hospitalUp, style: 'bold' },
-        { text: '.', style: 'normal' }
-    ];
-}
-
-// Divide texto preservando espaços (para não acontecer "nohospital" / "dainstrumentação")
-function tokenizeSegments(segments) {
-    const tokens = [];
-    segments.forEach(seg => {
-        const style = seg.style || 'normal';
-        const group = seg.group || null;
-        const parts = String(seg.text || '').split(/(\s+)/).filter(p => p !== '');
-        parts.forEach(p => tokens.push({ text: p, style, group }));
-    });
-    return tokens;
-}
-
-function isSpaceToken(t) {
-    return /^\s+$/.test(t);
-}
-
-// Normaliza uma palavra para comparar com nossa lista de "palavras órfãs"
-function normalizeWordForOrphanCheck(text) {
-    return String(text || '').replace(/[^A-Za-zÀ-ÿ]/g, '').toLowerCase();
-}
-
-
-// Remove pontuação FINAL (vírgula/ponto) que às vezes o usuário pode digitar sem querer.
-// Isso é útil porque nosso template já adiciona ",", "." depois dos campos.
-// Ex.: se o usuário digitar "JOÃO," no campo, a vírgula sairia em negrito (por estar dentro do campo).
-// Aqui nós removemos essas pontuações finais para que a pontuação do TEMPLATE (fora do negrito) seja usada.
-function stripTrailingTemplatePunctuation(value) {
-    let s = String(value || '').trim();
-    // remove repetidamente vírgulas/pontos apenas no FINAL
-    while (s.length && /[,.]/.test(s[s.length - 1])) {
-        s = s.slice(0, -1).trimEnd();
-    }
-    return s;
-}
-
-// Faz o "layout" do texto em linhas, considerando:
-// - largura máxima (maxWidth)
-// - negrito/normal (porque muda o tamanho do texto)
-// - blocos não-quebráveis (CPF)
-// - evitar "palavras órfãs" no fim da linha
-function layoutRichText(doc, segments, maxWidth, options = {}) {
-    const indent = Number(options.firstLineIndent || 0);
-    const cpfGroupId = options.cpfGroupId || 'cpfBlock';
-
-    // Lista de palavras pequenas que ficam feias no fim da linha
-    const orphanWords = options.orphanWords || ['da', 'de', 'do', 'das', 'dos', 'no', 'na', 'nos', 'nas', 'e'];
-    const avoidOrphans = options.avoidOrphans !== false; // padrão: true
-
-    const tokens = tokenizeSegments(segments);
-
-    // ====== "Grudar" preposições à próxima palavra (anti "dainstrumentação") ======
-    // Em alguns visualizadores de PDF, ao COPIAR o texto, a quebra de linha pode "sumir"
-    // e palavras podem aparecer grudadas (ex.: "da" + "instrumentação" -> "dainstrumentação").
-    //
-    // Para evitar isso, fazemos um mini "bloco não-quebrável" com:
-    //   [preposição] + [espaço] + [próxima palavra]
-    // Exemplos: "da instrumentação", "no hospital", "de JOÃO", etc.
-    //
-    // Importante: isso NÃO muda o texto, só evita quebrar linha no meio desses pares.
-    for (let k = 0; k < tokens.length - 2; k++) {
-        const t0 = tokens[k];
-        const t1 = tokens[k + 1];
-        const t2 = tokens[k + 2];
-
-        // Não mexe em nada que já tenha grupo (ex.: bloco do CPF)
-        if (t0.group || t1.group || t2.group) continue;
-
-        const w0 = normalizeWordForOrphanCheck(t0.text);
-        if (!w0 || !orphanWords.includes(w0)) continue;
-
-        // Precisamos do padrão: palavra + espaço + palavra
-        if (!isSpaceToken(t1.text)) continue;
-
-        const w2 = normalizeWordForOrphanCheck(t2.text);
-        if (!w2) continue;
-
-        // Grupo único só para esse trio
-        const gid = `keepNext_${k}`;
-        t0.group = gid;
-        t1.group = gid;
-        t2.group = gid;
-    }
-
-    const lines = [];
-    let lineTokens = [];
-    let lineWidth = 0;
-    let lineIndex = 0;
-
-    // Flag para saber se o CPF foi empurrado para a linha de baixo
-    let cpfWrapped = false;
-
-    const getWidth = (tok) => {
-        doc.setFont('helvetica', tok.style === 'bold' ? 'bold' : 'normal');
-        return doc.getTextWidth(tok.text);
-    };
-
-    const availableWidthForLine = (idx) => maxWidth - (idx === 0 ? indent : 0);
-
-    const trimEndSpaces = () => {
-        while (lineTokens.length && isSpaceToken(lineTokens[lineTokens.length - 1].text)) {
-            const t = lineTokens.pop();
-            lineWidth -= getWidth(t);
-        }
-    };
-
-    const pushLine = () => {
-        trimEndSpaces();
-        // Evita adicionar linha vazia sem necessidade
-        if (lineTokens.length) {
-            lines.push({ tokens: lineTokens, width: lineWidth });
-        }
-        lineTokens = [];
-        lineWidth = 0;
-        lineIndex += 1;
-    };
-
-    // Se a linha termina com "da/de/do..." e ainda existe texto depois,
-    // movemos essa palavrinha para a próxima linha.
-    const moveOrphanToNextLine = (insertAtIndex) => {
-        trimEndSpaces();
-        if (!lineTokens.length) return;
-
-        const lastTok = lineTokens[lineTokens.length - 1];
-        const lastWord = normalizeWordForOrphanCheck(lastTok.text);
-
-        if (!lastWord || !orphanWords.includes(lastWord)) return;
-
-        // Contar quantas palavras existem na linha (para não esvaziar a linha)
-        let words = 0;
-        lineTokens.forEach(t => {
-            if (!isSpaceToken(t.text) && normalizeWordForOrphanCheck(t.text)) words++;
-        });
-        if (words <= 1) return;
-
-        // Remove a palavra órfã
-        const moved = [];
-        const wordTok = lineTokens.pop();
-        lineWidth -= getWidth(wordTok);
-        moved.unshift(wordTok);
-
-        // Se existir um espaço ANTES dela, movemos junto
-        if (lineTokens.length && isSpaceToken(lineTokens[lineTokens.length - 1].text)) {
-            const spaceTok = lineTokens.pop();
-            lineWidth -= getWidth(spaceTok);
-            moved.unshift(spaceTok);
-        }
-
-        // Coloca de volta na fila para ser processado na próxima linha
-        tokens.splice(insertAtIndex, 0, ...moved);
-    };
-
-    for (let i = 0; i < tokens.length; ) {
-        const tok = tokens[i];
-
-        // Evita começar uma linha com espaço.
-        if (lineTokens.length === 0 && isSpaceToken(tok.text)) {
-            i++;
-            continue;
-        }
-
-        const available = availableWidthForLine(lineIndex);
-
-        // ====== Bloco não-quebrável (CPF) ======
-        if (tok.group) {
-            const gid = tok.group;
-            let j = i;
-            const groupTokens = [];
-
-            while (j < tokens.length && tokens[j].group === gid) {
-                groupTokens.push(tokens[j]);
-                j++;
-            }
-
-            const groupWidth = groupTokens.reduce((sum, t) => sum + getWidth(t), 0);
-
-            // Se o bloco não cabe no final da linha atual, quebramos ANTES dele.
-            // Isso é o que evita "CPF.:" na linha 1 e o número sozinho na linha 2.
-            if (groupWidth > (available - lineWidth) && lineTokens.length > 0) {
-                if (avoidOrphans) moveOrphanToNextLine(i);
-
-                // Depois de evitar órfãos, talvez a linha tenha mudado.
-                if (groupWidth > (available - lineWidth) && lineTokens.length > 0) {
-                    // Marca que o CPF foi empurrado para a linha de baixo,
-                    // mas SOMENTE se isso ocorreu na primeira linha.
-                    if (gid === cpfGroupId && lineIndex === 0) cpfWrapped = true;
-
-                    pushLine();
-                    continue; // processa o mesmo bloco novamente na próxima linha
-                }
-            }
-
-            // Se o bloco for maior que a largura da linha (muito raro),
-            // quebramos ele "na marra" (tirando o grupo) para não travar.
-            if (lineTokens.length === 0 && groupWidth > available) {
-                tokens[i] = { ...tok, group: null };
-                continue;
-            }
-
-            // Cabe: adiciona o bloco todo
-            groupTokens.forEach(t => {
-                // Evita começar linha com espaços
-                if (lineTokens.length === 0 && isSpaceToken(t.text)) return;
-                lineTokens.push(t);
-                lineWidth += getWidth(t);
-            });
-
-            i = j;
-            continue;
-        }
-
-        // ====== Token normal ======
-        const w = getWidth(tok);
-
-        if (lineWidth + w <= available) {
-            lineTokens.push(tok);
-            lineWidth += w;
-            i++;
-            continue;
-        }
-
-        // Quebra de linha por falta de espaço
-        if (lineTokens.length > 0) {
-            if (avoidOrphans) moveOrphanToNextLine(i);
-            pushLine();
-        } else {
-            // Token enorme (quase nunca): força colocar e quebra em seguida.
-            lineTokens.push(tok);
-            lineWidth += w;
-            i++;
-            pushLine();
-        }
-    }
-
-    // Última linha
-    pushLine();
-
-    return { lines, cpfWrapped };
-}
-
-// Desenha (renderiza) o texto já "quebrado" em linhas
-function drawRichText(doc, layout, x, y, maxWidth, lineHeight, options = {}) {
-    const indent = Number(options.firstLineIndent || 0);
-    const shouldCenterFirstLine = Boolean(options.centerFirstLineIfCpfWrapped && layout.cpfWrapped);
-
-    // Desenha linha por linha
-    layout.lines.forEach((line, idx) => {
-        let startX = x;
-
-        // Pedido seu: quando o CPF for empurrado para a linha de baixo,
-        // centralizamos a PRIMEIRA linha.
-        if (idx === 0) {
-            if (shouldCenterFirstLine) {
-                startX = x + (maxWidth - line.width) / 2;
-            } else {
-                startX = x + indent; // recuo pequeno só na primeira linha
-            }
-        }
-
-        let cursorX = startX;
-        const cursorY = y + (idx * lineHeight);
-
-        line.tokens.forEach(tok => {
-            doc.setFont('helvetica', tok.style === 'bold' ? 'bold' : 'normal');
-            const w = doc.getTextWidth(tok.text);
-
-            // Não precisa "desenhar" espaços, basta avançar o cursor.
-            if (!isSpaceToken(tok.text)) {
-                doc.text(tok.text, cursorX, cursorY);
-            }
-            cursorX += w;
-        });
-    });
-
-    // Retorna o Y da última linha (baseline)
-    return y + (layout.lines.length - 1) * lineHeight;
-}
-
-
-async function generatePDF() {
-    // Envolve tudo em try/catch para nunca "ficar sem resposta" ao clicar no botão.
-    try {
-        vibrateDevice(100);
-
-        // ✅ Segurança: se a biblioteca jsPDF não carregou (CDN offline/bloqueado),
-        // mostramos uma mensagem clara ao invés de "não acontecer nada".
-        if (!window.jspdf || !window.jspdf.jsPDF) {
-            showToast('❌ Não foi possível gerar o PDF: a biblioteca jsPDF não carregou. Verifique sua internet (ou recarregue a página).', 7000);
-            return;
-        }
-
-        const { jsPDF } = window.jspdf;
-    // ✅ Importante: definimos explicitamente A4 e unidade em mm
-    // para a formatação bater com o modelo (independente do dispositivo).
-    const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
-
-    // ====== Coleta dos dados do formulário ======
-    const acompanhado = document.getElementById('acompanhado').checked;
-    const nomeResponsavel = document.getElementById('nome-responsavel').value.trim();
-    const cpf = document.getElementById('cpf').value.trim();
-    const nome = document.getElementById('nome').value.trim();
-    const valor = document.getElementById('valor').value.trim();
-    const cirurgia = document.getElementById('cirurgia').value.trim();
-    const hospital = document.getElementById('hospital').value.trim();
-    const dia = document.getElementById('dia').value;
-    const mes = document.getElementById('mes').value; // já vem em caixa alta (ex: JANEIRO)
-    const ano = document.getElementById('ano').value;
-
-    // ====== Layout base do PDF (igual ao modelo anexado) ======
-    const pageWidth = doc.internal.pageSize.getWidth();   // A4: 210mm
-    const pageHeight = doc.internal.pageSize.getHeight(); // A4: 297mm
-
-    const leftMargin = 20;   // margem parecida com o modelo
-    const rightMargin = 20;
-    const maxWidth = pageWidth - leftMargin - rightMargin;
-
-    const lineHeight = 6.1;   // espaçamento entre linhas do parágrafo
-    const firstLineIndent = 5; // "pequeno espaço" no começo do parágrafo
-
-    // Monta os "pedaços" do texto (normal/negrito)
-    const segments = buildReceiptSegments({
-        acompanhado,
-        nomeResponsavel,
-        cpf,
-        nome,
-        valor,
-        cirurgia,
-        hospital
-    });
-
-    // Primeiro: fazemos o layout (quebra em linhas) SEM desenhar ainda.
-    // Isso permite calcular o "tamanho total" do conteúdo e centralizar verticalmente.
-    doc.setFontSize(14);
-    const bodyLayout = layoutRichText(doc, segments, maxWidth, {
-        firstLineIndent,
-        cpfGroupId: 'cpfBlock',
-        avoidOrphans: true
-    });
-
-    const linesCount = Math.max(1, bodyLayout.lines.length);
-
-    // ====== Centralização vertical (top/bottom) ======
-    // Mantemos as mesmas distâncias do modelo:
-    // - título → corpo: 18mm
-    // - corpo → data: 24mm
-    // - data → assinatura: 36mm
-    // - linha do CPF da assinatura: +9mm
-    //
-    // Total = 87mm + altura do corpo (em função do número de linhas)
-const bodyHeight = (linesCount - 1) * lineHeight;
-
-// ====== Centralização vertical (top/bottom) MAIS exata ======
-// Antes, nós centralizávamos usando só "87 + bodyHeight" (distâncias entre baselines).
-// Isso é quase perfeito, mas NÃO considera que o texto tem "altura" acima/abaixo da baseline.
-// Para ficar bem no centro visual (topo e rodapé com o mesmo espaço),
-// incluímos uma estimativa da altura do texto do título e do último texto (CPF da assinatura).
-const ptToMm = (pt) => pt * 0.3527777778;
-
-// Estimativas simples (boas na prática):
-// - ascent: parte do texto acima da baseline (~70%)
-// - descent: parte do texto abaixo da baseline (~30%)
-const titleAscent = ptToMm(18) * 0.7;      // título usa fontSize 18
-const signatureDescent = ptToMm(14) * 0.3; // assinatura usa fontSize 14
-
-// "87" = (título→corpo 18) + (corpo→data 24) + (data→assinatura 36) + (assinatura nome→CPF 9)
-const totalHeight = 87 + bodyHeight + titleAscent + signatureDescent;
-
-// y do TÍTULO (baseline) calculado para centralizar o bloco inteiro na página
-const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
-
-    const bodyStartY = titleY + 18;
-    const endBodyY = bodyStartY + bodyHeight;
-
-    const dateY = endBodyY + 24;
-    const signatureNameY = dateY + 36;
-    const signatureCpfY = signatureNameY + 9;
-
-    // ====== Desenho do PDF ======
-
-    // Título
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
-    doc.text('RECIBO', pageWidth / 2, titleY, { align: 'center' });
-
-    // Corpo do texto (com negrito no meio)
-    doc.setFontSize(14);
-
-    // Agora desenha com as regras pedidas:
-    // - CPF não quebra no meio (CPF + número + vírgula)
-    // - Se precisar quebrar, joga o CPF inteiro para a próxima linha e centraliza a 1ª linha
-    const endBodyBaseline = drawRichText(doc, bodyLayout, leftMargin, bodyStartY, maxWidth, lineHeight, {
-        firstLineIndent,
-        centerFirstLineIfCpfWrapped: true
-    });
-
-    // Data (mês em caixa alta; dia com zero à esquerda)
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(14);
-    const diaFmt = String(dia).padStart(2, '0');
-    const dataCompleta = `Juiz de Fora, ${diaFmt} de ${String(mes).toLocaleUpperCase('pt-BR')} de ${ano}`;
-    doc.text(dataCompleta, leftMargin, dateY);
-
-    // Assinatura (sem linha, como no modelo)
-    // Pedido seu: assinatura em NEGRITO ("Daniela Ramos Oliveira" + "CPF 088.959.546-10")
-    doc.setFont('helvetica', 'bold');
-    doc.text('Daniela Ramos Oliveira', pageWidth / 2, signatureNameY, { align: 'center' });
-    doc.text('CPF 088.959.546-10', pageWidth / 2, signatureCpfY, { align: 'center' });
-    doc.setFont('helvetica', 'normal');
-
-    // ====== Nome do arquivo (ex: Recibo_DAVI_BONIN_MONTES_05-JANEIRO-2026.pdf) ======
-    const safeNome = (nome || 'PACIENTE')
-        .trim()
-        .toLocaleUpperCase('pt-BR')
-        .replace(/\s+/g, '_');
-
-    const nomeArquivo = `Recibo_${safeNome}_${diaFmt}-${String(mes).toLocaleUpperCase('pt-BR')}-${ano}.pdf`;
-
-    // ====== Depois de gerar: perguntar o que fazer (abrir/baixar) ======
-    // Em vez de iniciar download automaticamente, mostramos um menu de opções
-    // para o usuário escolher (isso melhora MUITO no iPhone e também dá controle no Android/PC).
-    const pdfBlob = doc.output('blob');
-
-    // Guardamos o PDF na memória para os botões do modal usarem.
-    lastGeneratedPDF = { blob: pdfBlob, fileName: nomeArquivo };
-
-    // Fecha o modal de confirmação e abre o modal de ações.
-    closeModal();
-    showPdfActionModal();
-
-    vibrateDevice(200);
-    return;
-
-    } catch (err) {
-        console.error('Falha ao gerar PDF:', err);
-        const msg = err && err.message ? err.message : String(err);
-        showToast('❌ Falha ao gerar o PDF: ' + msg, 7000);
-    }
-}
-
-// Fechar modal ao clicar fora
-window.onclick = function(event) {
-    // Fecha o modal de confirmação (clique fora)
-    const confirmModal = document.getElementById('confirmModal');
-    if (event.target === confirmModal) {
-        closeModal();
-        return;
-    }
-
-    // Fecha o modal de ações do PDF (clique fora)
-    const pdfActionModal = document.getElementById('pdfActionModal');
-    if (pdfActionModal && event.target === pdfActionModal) {
-        closePdfActionModal();
-    }
-}
-}
-
-// Prevenir zoom no double tap em iOS
-let lastTouchEnd = 0;
-document.addEventListener('touchend', function(event) {
-    const now = Date.now();
-    if (now - lastTouchEnd <= 300) {
-        event.preventDefault();
-    }
-    lastTouchEnd = now;
-}, false);
-
-// Inicialização
-document.addEventListener('DOMContentLoaded', function() {
-    displayDeviceInfo();
+// ============================================================
+// ✅ Inicialização
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+    updateDeviceBadge();
     setAnoPadraoDoDispositivo();
-    aplicarNegritoAssinaturaPreview();
     updatePreview();
-    
-    // Atualizar info do dispositivo em resize (para tablets em rotação)
-    let resizeTimer;
-    window.addEventListener('resize', function() {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(function() {
-            displayDeviceInfo();
-        }, 250);
-    });
-    
-    console.log('Gerador de Recibos carregado com sucesso!');
-    console.log('Dispositivo detectado:', detectDevice().type);
-
-    // Garante que funções chamadas pelo HTML (onclick="...") existam no escopo global
-    window.showModal = showModal;
-    window.generatePDF = generatePDF;
-    window.closeModal = closeModal;
-
 });
