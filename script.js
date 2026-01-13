@@ -92,9 +92,7 @@ function openPdfWithShareUI(blob, fileName) {
         showToast('Popup bloqueado. Use o link "Abrir PDF" na tela.');
         const url = URL.createObjectURL(blob);
         showOpenPdfLink(url + '#page=1&zoom=page-width', fileName);
-        // Mantemos o URL vivo por um tempo
         setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
-        // E ainda mostramos a barra de compartilhar na página atual (fallback)
         showShareBar(blob, fileName);
         return;
     }
@@ -104,8 +102,9 @@ function openPdfWithShareUI(blob, fileName) {
     w.__pdfBlob = blob;
     w.__pdfFileName = fileName;
 
-    // Página HTML simples com um "top bar" e o visualizador abaixo.
-    // OBS: usamos <object type="application/pdf"> por compatibilidade.
+    // ✅ Objetivo: "visualização embutida suportada em qualquer navegador"
+    // Alguns navegadores (principalmente em Android) NÃO renderizam PDF dentro de <iframe>/<object>.
+    // Para resolver isso de forma consistente, usamos PDF.js para renderizar o PDF em canvas.
     w.document.open();
     w.document.write(`<!doctype html>
 <html lang="pt-BR">
@@ -114,39 +113,113 @@ function openPdfWithShareUI(blob, fileName) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(fileName)}</title>
   <style>
-    html, body { margin:0; padding:0; height:100%; width:100%; background:#111; font-family: Arial, sans-serif; }
+    :root {
+      --bg: #0e0f12;
+      --panel: #14151a;
+      --text: #e9eaee;
+      --muted: rgba(233,234,238,0.72);
+      --primary: #5c7cfa;
+      --primary2: #4f6df0;
+      --btn: rgba(255,255,255,0.10);
+      --btn2: rgba(255,255,255,0.14);
+      --border: rgba(255,255,255,0.10);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
     .topbar {
-      position: fixed; top:0; left:0; right:0;
-      display:flex; gap:10px; align-items:center; justify-content:space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
       padding: 10px 12px;
-      background: rgba(255,255,255,0.98);
-      border-bottom: 2px solid #667eea;
-      z-index: 9999;
+      background: var(--panel);
+      border-bottom: 2px solid var(--primary);
     }
-    .title { font-size: 14px; font-weight: bold; color:#222; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55vw; }
-    .actions { display:flex; gap:10px; }
+    .title {
+      font-weight: 800;
+      letter-spacing: 0.2px;
+      max-width: 45vw;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .actions { display: flex; gap: 8px; align-items: center; }
     button {
-      border: none; cursor: pointer;
+      appearance: none;
+      border: 0;
       padding: 10px 12px;
-      border-radius: 10px;
-      font-size: 14px; font-weight: 700;
+      border-radius: 12px;
+      font-weight: 800;
+      font-size: 14px;
+      cursor: pointer;
+      background: var(--btn);
+      color: var(--text);
     }
-    .btn-share { background: #667eea; color:white; }
-    .btn-download { background: #e9e9e9; color:#222; }
-    .btn-close { background: #222; color:white; }
+    button:hover { background: var(--btn2); }
+    .btn-download { background: rgba(92,124,250,0.18); }
+    .btn-download:hover { background: rgba(92,124,250,0.28); }
+    .btn-share { background: rgba(92,124,250,0.90); color: #fff; }
+    .btn-share:hover { background: var(--primary2); }
+    .btn-close { background: rgba(255,255,255,0.12); }
     .viewer {
-      position: absolute;
-      top: 56px; /* altura aproximada da topbar */
-      left: 0; right: 0; bottom: 0;
-      background:#111;
+      height: calc(100% - 58px);
+      overflow: auto;
+      padding: 18px 12px 32px;
     }
-    object { width:100%; height:100%; border:0; background:#111; }
-    .fallback {
-      color:#fff; padding: 18px; line-height: 1.4;
-      max-width: 900px;
+    .status {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 10px auto 16px;
+      max-width: 920px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.04);
+    }
+    .pdfWrap {
+      max-width: 920px;
       margin: 0 auto;
+      display: grid;
+      gap: 16px;
+      justify-items: center;
     }
-    .fallback a { color: #9fc2ff; font-weight: 700; }
+    .pageCard {
+      width: 100%;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 12px;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      background: #fff;
+    }
+    .fallback {
+      display: none;
+      max-width: 920px;
+      margin: 18px auto 0;
+      padding: 16px 14px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.05);
+      line-height: 1.45;
+    }
+    .fallback a { color: #9fc2ff; font-weight: 800; }
   </style>
 </head>
 <body>
@@ -160,40 +233,45 @@ function openPdfWithShareUI(blob, fileName) {
   </div>
 
   <div class="viewer">
-    <object id="pdfObj" type="application/pdf">
-      <div class="fallback">
-        <p><strong>Visualização embutida não suportada neste navegador.</strong></p>
-        <p>Você ainda pode:</p>
-        <ul>
-          <li><strong>Baixar</strong> o PDF (botão acima)</li>
-          <li><strong>Compartilhar</strong> o PDF (botão acima)</li>
-          <li>Ou <a id="openNative" href="#" target="_blank" rel="noopener">abrir no visualizador do sistema</a></li>
-        </ul>
-      </div>
-    </object>
+    <div id="status" class="status">Carregando visualização do PDF…</div>
+    <div id="pdfCanvasContainer" class="pdfWrap"></div>
+
+    <div id="fallback" class="fallback">
+      <p><strong>Não foi possível renderizar o PDF embutido.</strong></p>
+      <p>Você ainda pode:</p>
+      <ul>
+        <li><strong>Baixar</strong> o PDF (botão acima)</li>
+        <li><strong>Compartilhar</strong> o PDF (botão acima)</li>
+        <li>Ou <a id="openNative" href="#" target="_blank" rel="noopener">abrir no visualizador do sistema</a></li>
+      </ul>
+    </div>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
   <script>
     (function() {
       const blob = window.__pdfBlob || (window.opener && window.opener.__getLastGeneratedPDF && (window.opener.__getLastGeneratedPDF() || {}).blob) || null;
       const fileName = window.__pdfFileName || (window.opener && window.opener.__getLastGeneratedPDF && (window.opener.__getLastGeneratedPDF() || {}).fileName) || 'recibo.pdf';
 
+      const statusEl = document.getElementById('status');
+      const container = document.getElementById('pdfCanvasContainer');
+      const fallbackEl = document.getElementById('fallback');
+
+      function setStatus(msg) { statusEl.textContent = msg; }
+
       if (!blob) {
-        alert('Não foi possível acessar o PDF para abrir/compartilhar.');
+        setStatus('Erro: não foi possível obter o PDF gerado.');
+        fallbackEl.style.display = 'block';
         return;
       }
 
-      // Criamos o URL do blob (PDF) e setamos no <object>
       const url = URL.createObjectURL(blob);
       const viewUrl = url + '#page=1&zoom=page-width';
-
-      const obj = document.getElementById('pdfObj');
-      obj.data = viewUrl;
-
       const openNative = document.getElementById('openNative');
       if (openNative) openNative.href = viewUrl;
 
-      // Download
+      document.getElementById('btnClose').onclick = function() { window.close(); };
+
       document.getElementById('btnDl').onclick = function() {
         const a = document.createElement('a');
         a.href = url;
@@ -204,33 +282,99 @@ function openPdfWithShareUI(blob, fileName) {
         a.remove();
       };
 
-      // Compartilhar (Web Share API)
       document.getElementById('btnSh').onclick = async function() {
         try {
           const file = new File([blob], fileName, { type: 'application/pdf' });
-
           if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({
-              files: [file],
-              title: 'Recibo Médico',
-              text: 'PDF do recibo gerado.'
-            });
+            await navigator.share({ files: [file], title: 'Recibo', text: 'PDF do recibo gerado.' });
           } else {
-            alert('Compartilhamento não suportado neste navegador. Use "Baixar" e compartilhe o arquivo pelo seu app.');
+            setStatus('Compartilhar não suportado neste navegador. Use "Baixar" e compartilhe pelo sistema.');
           }
         } catch (e) {
-          // Usuário cancelou ou houve erro
-          // Não precisamos assustar o usuário com erro técnico
+          setStatus('Compartilhamento cancelado ou não disponível.');
         }
       };
 
-      // Fechar
-      document.getElementById('btnClose').onclick = function() {
-        window.close();
-      };
+      async function blobToArrayBuffer(b) {
+        if (b.arrayBuffer) return await b.arrayBuffer();
+        return await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = reject;
+          fr.readAsArrayBuffer(b);
+        });
+      }
 
-      // Limpa o URL quando a janela for fechada (boa prática)
-      window.addEventListener('beforeunload', function() {
+      function clearPages() { container.innerHTML = ''; }
+
+      async function renderAll(pdfDoc) {
+        clearPages();
+
+        // recibo é 1 página, mas suportamos várias
+        const targetWidth = Math.max(320, container.clientWidth);
+
+        for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+          const page = await pdfDoc.getPage(pageNum);
+          const unscaled = page.getViewport({ scale: 1 });
+          const scale = targetWidth / unscaled.width;
+          const viewport = page.getViewport({ scale });
+
+          const outputScale = window.devicePixelRatio || 1;
+
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d', { alpha: false });
+
+          canvas.width = Math.floor(viewport.width * outputScale);
+          canvas.height = Math.floor(viewport.height * outputScale);
+          canvas.style.width = Math.floor(viewport.width) + 'px';
+          canvas.style.height = Math.floor(viewport.height) + 'px';
+
+          ctx.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+
+          const card = document.createElement('div');
+          card.className = 'pageCard';
+          card.appendChild(canvas);
+          container.appendChild(card);
+
+          await page.render({ canvasContext: ctx, viewport }).promise;
+        }
+
+        setStatus('PDF pronto para visualizar, baixar ou compartilhar.');
+      }
+
+      let pdfDoc = null;
+      let resizeTimer = null;
+
+      async function init() {
+        try {
+          if (!window.pdfjsLib) throw new Error('PDF.js não carregou.');
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js';
+
+          setStatus('Renderizando PDF…');
+
+          const data = await blobToArrayBuffer(blob);
+          const loadingTask = pdfjsLib.getDocument({ data });
+          pdfDoc = await loadingTask.promise;
+
+          await renderAll(pdfDoc);
+
+          window.addEventListener('resize', () => {
+            if (!pdfDoc) return;
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => renderAll(pdfDoc), 250);
+          });
+
+        } catch (err) {
+          console.error(err);
+          setStatus('Falha ao renderizar embutido. Use "Baixar" ou "abrir no visualizador do sistema".');
+          fallbackEl.style.display = 'block';
+        }
+      }
+
+      init();
+
+      window.addEventListener('beforeunload', () => {
         try { URL.revokeObjectURL(url); } catch(e) {}
       });
     })();
