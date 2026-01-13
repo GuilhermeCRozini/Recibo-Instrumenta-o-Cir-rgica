@@ -7,6 +7,9 @@
 // ============================================================
 let lastGeneratedPDF = null; // { blob: Blob, fileName: string }
 
+// Expondo para janelas filhas (usado no modo 'Apenas abrir' com botão Compartilhar)
+window.__getLastGeneratedPDF = () => lastGeneratedPDF;
+
 /**
  * Faz download do PDF a partir de um Blob.
  * Obs: No iOS/Safari o atributo download pode ser ignorado (limitação do iOS).
@@ -67,6 +70,176 @@ function openPdfFromBlob(blob, fileName) {
     // Mantemos o Object URL válido por mais tempo, pois o usuário pode demorar a abrir o PDF.
     setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000); // 10 minutos
 }
+
+/**
+ * Abre uma NOVA JANELA com:
+ * - Visualização do PDF (quando o navegador permitir)
+ * - Botão "Compartilhar" (Web Share API) e "Baixar"
+ *
+ * Por que isso existe?
+ * - Quando abrimos o PDF "direto" (bloburl) não dá para colocar botões na tela,
+ *   porque o navegador troca a página pelo visualizador nativo de PDF.
+ * - Aqui nós abrimos uma página HTML nossa, e dentro dela tentamos embutir o PDF.
+ *   Mesmo se a visualização embutida não funcionar (comum em alguns Android),
+ *   o botão de Compartilhar e o de Baixar continuam funcionando.
+ */
+function openPdfWithShareUI(blob, fileName) {
+    // Abre uma janela que nós controlamos (para conseguir mostrar botões).
+    const w = window.open('', '_blank');
+
+    // Se o navegador bloquear popups, caímos no fallback (link na tela atual).
+    if (!w) {
+        showToast('Popup bloqueado. Use o link "Abrir PDF" na tela.');
+        const url = URL.createObjectURL(blob);
+        showOpenPdfLink(url + '#page=1&zoom=page-width', fileName);
+        // Mantemos o URL vivo por um tempo
+        setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
+        // E ainda mostramos a barra de compartilhar na página atual (fallback)
+        showShareBar(blob, fileName);
+        return;
+    }
+
+    // Guardamos o blob e o nome do arquivo dentro da nova janela
+    // (assim o código lá dentro consegue compartilhar/baixar).
+    w.__pdfBlob = blob;
+    w.__pdfFileName = fileName;
+
+    // Página HTML simples com um "top bar" e o visualizador abaixo.
+    // OBS: usamos <object type="application/pdf"> por compatibilidade.
+    w.document.open();
+    w.document.write(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(fileName)}</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; width:100%; background:#111; font-family: Arial, sans-serif; }
+    .topbar {
+      position: fixed; top:0; left:0; right:0;
+      display:flex; gap:10px; align-items:center; justify-content:space-between;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.98);
+      border-bottom: 2px solid #667eea;
+      z-index: 9999;
+    }
+    .title { font-size: 14px; font-weight: bold; color:#222; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55vw; }
+    .actions { display:flex; gap:10px; }
+    button {
+      border: none; cursor: pointer;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 14px; font-weight: 700;
+    }
+    .btn-share { background: #667eea; color:white; }
+    .btn-download { background: #e9e9e9; color:#222; }
+    .btn-close { background: #222; color:white; }
+    .viewer {
+      position: absolute;
+      top: 56px; /* altura aproximada da topbar */
+      left: 0; right: 0; bottom: 0;
+      background:#111;
+    }
+    object { width:100%; height:100%; border:0; background:#111; }
+    .fallback {
+      color:#fff; padding: 18px; line-height: 1.4;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .fallback a { color: #9fc2ff; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="title">PDF: ${escapeHtml(fileName)}</div>
+    <div class="actions">
+      <button class="btn-download" id="btnDl">Baixar</button>
+      <button class="btn-share" id="btnSh">Compartilhar</button>
+      <button class="btn-close" id="btnClose">Fechar</button>
+    </div>
+  </div>
+
+  <div class="viewer">
+    <object id="pdfObj" type="application/pdf">
+      <div class="fallback">
+        <p><strong>Visualização embutida não suportada neste navegador.</strong></p>
+        <p>Você ainda pode:</p>
+        <ul>
+          <li><strong>Baixar</strong> o PDF (botão acima)</li>
+          <li><strong>Compartilhar</strong> o PDF (botão acima)</li>
+          <li>Ou <a id="openNative" href="#" target="_blank" rel="noopener">abrir no visualizador do sistema</a></li>
+        </ul>
+      </div>
+    </object>
+  </div>
+
+  <script>
+    (function() {
+      const blob = window.__pdfBlob || (window.opener && window.opener.__getLastGeneratedPDF && (window.opener.__getLastGeneratedPDF() || {}).blob) || null;
+      const fileName = window.__pdfFileName || (window.opener && window.opener.__getLastGeneratedPDF && (window.opener.__getLastGeneratedPDF() || {}).fileName) || 'recibo.pdf';
+
+      if (!blob) {
+        alert('Não foi possível acessar o PDF para abrir/compartilhar.');
+        return;
+      }
+
+      // Criamos o URL do blob (PDF) e setamos no <object>
+      const url = URL.createObjectURL(blob);
+      const viewUrl = url + '#page=1&zoom=page-width';
+
+      const obj = document.getElementById('pdfObj');
+      obj.data = viewUrl;
+
+      const openNative = document.getElementById('openNative');
+      if (openNative) openNative.href = viewUrl;
+
+      // Download
+      document.getElementById('btnDl').onclick = function() {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      };
+
+      // Compartilhar (Web Share API)
+      document.getElementById('btnSh').onclick = async function() {
+        try {
+          const file = new File([blob], fileName, { type: 'application/pdf' });
+
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              title: 'Recibo Médico',
+              text: 'PDF do recibo gerado.'
+            });
+          } else {
+            alert('Compartilhamento não suportado neste navegador. Use "Baixar" e compartilhe o arquivo pelo seu app.');
+          }
+        } catch (e) {
+          // Usuário cancelou ou houve erro
+          // Não precisamos assustar o usuário com erro técnico
+        }
+      };
+
+      // Fechar
+      document.getElementById('btnClose').onclick = function() {
+        window.close();
+      };
+
+      // Limpa o URL quando a janela for fechada (boa prática)
+      window.addEventListener('beforeunload', function() {
+        try { URL.revokeObjectURL(url); } catch(e) {}
+      });
+    })();
+  </script>
+</body>
+</html>`);
+    w.document.close();
+}
+
 
 /**
  * Mostra um link na tela para o usuário abrir o PDF caso o navegador bloqueie popups.
@@ -273,9 +446,8 @@ function showPdfOptionsModal(blob, fileName) {
     modal.querySelector('#pdfOptCancel').onclick = () => modal.remove();
 
     modal.querySelector('#pdfOptSecondary').onclick = () => {
-        // Apenas abrir (preview)
-        openPdfFromBlob(blob, fileName);
-        showShareBar(blob, fileName);
+        // Apenas abrir: abre o PDF em uma janela com botões (Compartilhar/Baixar)
+        openPdfWithShareUI(blob, fileName);
         modal.remove();
     };
 
