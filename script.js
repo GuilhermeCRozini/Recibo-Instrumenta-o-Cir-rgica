@@ -131,6 +131,103 @@ async function sharePdfIOS(blob, fileName) {
 }
 
 /**
+ * Compartilhar o PDF via Web Share API (Android/iOS/alguns desktops).
+ * Retorna true se o navegador abriu a tela de compartilhamento, false se não suportado ou se o usuário cancelou.
+ *
+ * Observação importante:
+ * - Não dá para inserir botões dentro do visualizador nativo de PDF do navegador.
+ * - Por isso, este compartilhamento é feito pela página do gerador (um botão fixo que aparece após abrir).
+ */
+async function sharePdfBlob(blob, fileName) {
+    try {
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+                files: [file],
+                title: 'Recibo Médico',
+                text: 'PDF do recibo gerado. Você pode salvar ou compartilhar.'
+            });
+            return true;
+        }
+    } catch (e) {
+        // Pode falhar se: usuário cancelou, navegador não suporta, ou File não é aceito.
+    }
+    return false;
+}
+
+/**
+ * Barra fixa com botão "Compartilhar PDF".
+ * Ela aparece quando o usuário escolhe "Apenas abrir".
+ */
+function showShareBar(blob, fileName) {
+    let bar = document.getElementById('sharePdfBar');
+
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'sharePdfBar';
+
+        // Estilo inline para não depender do CSS (e não alterar outros arquivos).
+        bar.style.position = 'fixed';
+        bar.style.left = '50%';
+        bar.style.bottom = '14px';
+        bar.style.transform = 'translateX(-50%)';
+        bar.style.zIndex = '9999';
+        bar.style.background = 'rgba(255,255,255,0.98)';
+        bar.style.border = '2px solid #667eea';
+        bar.style.borderRadius = '14px';
+        bar.style.boxShadow = '0 10px 30px rgba(0,0,0,0.25)';
+        bar.style.padding = '10px 12px';
+        bar.style.display = 'flex';
+        bar.style.gap = '10px';
+        bar.style.alignItems = 'center';
+        bar.style.maxWidth = '92vw';
+
+        document.body.appendChild(bar);
+    }
+
+    bar.innerHTML = `
+        <div style="font-size:13px; color:#333; line-height:1.2;">
+            <strong>PDF aberto.</strong><br>
+            <span style="opacity:.8;">Compartilhar o arquivo?</span>
+        </div>
+        <button id="btnSharePdf" style="
+            border:none; cursor:pointer;
+            padding:10px 14px;
+            border-radius:10px;
+            font-weight:bold;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color:white;
+            min-height:44px;
+        ">Compartilhar PDF</button>
+        <button id="btnCloseSharePdf" style="
+            border:none; cursor:pointer;
+            padding:10px 12px;
+            border-radius:10px;
+            background:#e0e0e0;
+            color:#333;
+            min-height:44px;
+        ">Fechar</button>
+    `;
+
+    const shareBtn = document.getElementById('btnSharePdf');
+    const closeBtn = document.getElementById('btnCloseSharePdf');
+
+    shareBtn.onclick = async () => {
+        const ok = await sharePdfBlob(blob, fileName);
+
+        if (!ok) {
+            showToast('Seu navegador não suportou compartilhar por aqui. Dica: após abrir o PDF, use o botão "Compartilhar" do navegador/visualizador.');
+        }
+    };
+
+    closeBtn.onclick = () => {
+        bar.remove();
+    };
+}
+
+
+/**
  * Mostra um modal com as opções após gerar o PDF.
  * - Android/Desktop: "Baixar e abrir" ou "Apenas abrir"
  * - iOS: "Compartilhar/Salvar" ou "Apenas abrir"
@@ -178,6 +275,7 @@ function showPdfOptionsModal(blob, fileName) {
     modal.querySelector('#pdfOptSecondary').onclick = () => {
         // Apenas abrir (preview)
         openPdfFromBlob(blob, fileName);
+        showShareBar(blob, fileName);
         modal.remove();
     };
 
