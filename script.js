@@ -351,6 +351,9 @@ function updatePreview() {
 
 // Mostrar modal
 function showModal() {
+    // try/catch para evitar que um erro inesperado impeça o modal de aparecer
+    try {
+
     const acompanhado = document.getElementById('acompanhado').checked;
     const nomeResponsavel = document.getElementById('nome-responsavel').value.trim();
     const cpf = document.getElementById('cpf').value.trim();
@@ -406,6 +409,13 @@ let previewHTML = '<p><strong>Paciente:</strong> ' + nome.toLocaleUpperCase('pt-
     document.getElementById('confirmModal').style.display = 'block';
     
     vibrateDevice();
+
+    } catch (err) {
+        console.error('Erro ao abrir modal:', err);
+        const msg = err && err.message ? err.message : String(err);
+        if (typeof showToast === 'function') showToast('❌ Erro ao abrir o modal: ' + msg, 7000);
+        else alert('Erro ao abrir o modal: ' + msg);
+    }
 }
 
 // Fechar modal
@@ -464,6 +474,39 @@ function showToast(message, duration = 2500) {
         console.log('Toast falhou:', e);
     }
 }
+
+// ============================================================================
+// ✅ NOVO (robustez): Captura erros de JavaScript e mostra uma mensagem na tela
+// ----------------------------------------------------------------------------
+// Por que isso importa?
+// - Se algum detalhe do navegador bloquear algo (ex.: jsPDF não carregou, popup bloqueado, etc.),
+//   o usuário "vê nada acontecer".
+// - Com isso, você sempre recebe um feedback visual e dá para depurar mais fácil.
+// ============================================================================
+(function installGlobalErrorHandlers() {
+    // Evita instalar duas vezes (segurança)
+    if (window.__receiptErrorHandlersInstalled) return;
+    window.__receiptErrorHandlersInstalled = true;
+
+    window.addEventListener('error', function (ev) {
+        try {
+            const msg = ev && ev.message ? ev.message : 'Erro inesperado.';
+            console.error('Erro JS:', ev);
+            if (typeof showToast === 'function') showToast('❌ Erro: ' + msg, 6000);
+            else alert('Erro: ' + msg);
+        } catch (_) { /* silencioso */ }
+    });
+
+    window.addEventListener('unhandledrejection', function (ev) {
+        try {
+            const msg = ev && ev.reason ? (ev.reason.message || String(ev.reason)) : 'Erro inesperado.';
+            console.error('Promise rejeitada:', ev);
+            if (typeof showToast === 'function') showToast('❌ Erro: ' + msg, 6000);
+            else alert('Erro: ' + msg);
+        } catch (_) { /* silencioso */ }
+    });
+})();
+
 
 // ============================================================================
 // ✅ NOVO: Entregar o PDF no iPhone (iOS)
@@ -927,10 +970,18 @@ function drawRichText(doc, layout, x, y, maxWidth, lineHeight, options = {}) {
 
 
 async function generatePDF() {
-    vibrateDevice(100);
+    // Envolve tudo em try/catch para nunca "ficar sem resposta" ao clicar no botão.
+    try {
+        vibrateDevice(100);
 
-    const { jsPDF } = window.jspdf;
+        // ✅ Segurança: se a biblioteca jsPDF não carregou (CDN offline/bloqueado),
+        // mostramos uma mensagem clara ao invés de "não acontecer nada".
+        if (!window.jspdf || !window.jspdf.jsPDF) {
+            showToast('❌ Não foi possível gerar o PDF: a biblioteca jsPDF não carregou. Verifique sua internet (ou recarregue a página).', 7000);
+            return;
+        }
 
+        const { jsPDF } = window.jspdf;
     // ✅ Importante: definimos explicitamente A4 e unidade em mm
     // para a formatação bater com o modelo (independente do dispositivo).
     const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
@@ -1082,6 +1133,12 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
 
     closeModal();
     vibrateDevice(200);
+
+    } catch (err) {
+        console.error('Falha ao gerar PDF:', err);
+        const msg = err && err.message ? err.message : String(err);
+        showToast('❌ Falha ao gerar o PDF: ' + msg, 7000);
+    }
 }
 
 // Fechar modal ao clicar fora
@@ -1120,4 +1177,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
     console.log('Gerador de Recibos carregado com sucesso!');
     console.log('Dispositivo detectado:', detectDevice().type);
+
+    // Garante que funções chamadas pelo HTML (onclick="...") existam no escopo global
+    window.showModal = showModal;
+    window.generatePDF = generatePDF;
+    window.closeModal = closeModal;
+
 });
