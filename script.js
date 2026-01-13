@@ -28,59 +28,43 @@ function downloadPdfFromBlob(blob, fileName) {
  * Se o Safari bloquear popup, mostramos um link para o usuário tocar.
  */
 function openPdfFromBlob(blob, fileName) {
-    // Geramos um "endereço" temporário (Object URL) para o PDF
+    // Criamos um "endereço temporário" (Object URL) para o PDF.
+    // Esse URL só existe localmente no navegador enquanto a página estiver aberta.
     const url = URL.createObjectURL(blob);
 
-    // Dica importante:
-    // Alguns visualizadores (principalmente no Android/Chrome) abrem o PDF com zoom "Fit page",
-    // deixando tudo pequeno. Para ficar parecido com quando você abre o PDF baixado,
-    // tentamos sugerir "ajustar à largura" usando parâmetros no hash.
-    // Se o visualizador ignorar, ele só abre normalmente (sem quebrar nada).
+    // Alguns visualizadores respeitam este hash para abrir já "ajustado à largura".
+    // Se o navegador ignorar, ele apenas abre normalmente (não quebra nada).
     const viewUrl = `${url}#page=1&zoom=page-width`;
 
-    // ✅ iOS/Safari costuma ter comportamento melhor abrindo o PDF direto (sem iframe).
-    // Além disso, alguns iPhones podem bloquear PDF dentro de iframe.
-    if (isIOS()) {
-        const opened = window.open(viewUrl, '_blank');
-        if (!opened) showOpenPdfLink(viewUrl, fileName);
-        setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
-        return;
-    }
+    /*
+      IMPORTANTE (Android/Chrome):
+      - PDFs em ANDROID muitas vezes NÃO renderizam dentro de <iframe>/<embed>.
+      - Quando tentamos usar iframe, o navegador pode mostrar uma tela "about:blank" com botão "Abrir"
+        (o que você mostrou no print), porque ele está tentando baixar em vez de visualizar.
+      - Por isso, aqui abrimos o PDF DIRETAMENTE em uma nova aba.
+    */
+    const opened = window.open(viewUrl, '_blank');
 
-    // ✅ Android/Desktop: usamos uma "página simples" com iframe em tela cheia.
-    // Isso costuma dar uma experiência mais consistente e semelhante ao PDF baixado.
-    const viewerWindow = window.open('', '_blank');
-
-    if (viewerWindow) {
+    if (!opened) {
+        // Popup bloqueado: tentamos abrir via "clique" em um link (às vezes funciona melhor)
         try {
-            viewerWindow.document.open();
-            viewerWindow.document.write(`<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(fileName)}</title>
-  <style>
-    html, body { margin: 0; padding: 0; height: 100%; width: 100%; background: #111; }
-    iframe { border: 0; width: 100%; height: 100%; }
-  </style>
-</head>
-<body>
-  <iframe src="${viewUrl}" title="PDF - ${escapeHtml(fileName)}"></iframe>
-</body>
-</html>`);
-            viewerWindow.document.close();
+            const a = document.createElement('a');
+            a.href = viewUrl;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
         } catch (e) {
-            // Se por algum motivo o navegador bloquear o document.write, usamos o fallback
-            viewerWindow.location.href = viewUrl;
+            // ignora e cai no link visível abaixo
         }
-    } else {
-        // Popup bloqueado: mostramos um link visível (o usuário toca e abre)
+
+        // Fallback final: mostramos um link na própria página para o usuário tocar.
         showOpenPdfLink(viewUrl, fileName);
     }
 
-    // Mantemos o Object URL válido por mais tempo, porque o usuário pode demorar a abrir.
-    // (Se revogar cedo demais, o link/iframe pode parar de funcionar.)
+    // Mantemos o Object URL válido por mais tempo, pois o usuário pode demorar a abrir o PDF.
     setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000); // 10 minutos
 }
 
