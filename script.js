@@ -1283,11 +1283,25 @@ function buildReceiptSegments({ acompanhado, nomeResponsavel, cpf, nome, valor, 
         { text: ',', style: 'normal', group: 'cpfBlock' }
     ];
 
+    // ✅ Evita "pontuação perdida" (que pode cair sozinha na linha de baixo)
+    // Em alguns casos raros, o último caractere (',' ou '.') pode "não caber"
+    // e acabar indo para a próxima linha, parecendo que ficou um "espaço em branco"
+    // no final da linha atual.
+    //
+    // Para evitar isso, "grudamos" a pontuação ao campo anterior usando group:
+    // - Nome + vírgula
+    // - Hospital + ponto final
+    const gidNomeVirgula = 'nameComma';
+    const gidHospitalPonto = 'hospitalDot';
+
     if (acompanhado) {
         return [
             { text: 'Recebi de ', style: 'normal' },
-            { text: responsavel, style: 'bold' },
-            { text: ',', style: 'normal' },
+
+            // Nome do responsável + vírgula (vírgula NÃO fica em negrito)
+            { text: responsavel, style: 'bold', group: gidNomeVirgula },
+            { text: ',', style: 'normal', group: gidNomeVirgula },
+
             { text: ' ', style: 'normal' }, // espaço que some automaticamente se cair no início de uma nova linha
 
             ...cpfBlock,
@@ -1301,17 +1315,23 @@ function buildReceiptSegments({ acompanhado, nomeResponsavel, cpf, nome, valor, 
             { text: ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ', style: 'normal' },
             { text: cirurgiaUp, style: 'bold' },
 
-            { text: ' realizada no hospital ', style: 'normal' },
-            { text: hospitalUp, style: 'bold' },
-            { text: '.', style: 'normal' }
+            { text: ' ', style: 'normal' },
+            { text: 'realizada no hospital ', style: 'normal' },
+
+            // Hospital + ponto final (ponto NÃO fica em negrito)
+            { text: hospitalUp, style: 'bold', group: gidHospitalPonto },
+            { text: '.', style: 'normal', group: gidHospitalPonto }
         ];
     }
 
     // Não acompanhado
     return [
         { text: 'Recebi de ', style: 'normal' },
-        { text: paciente, style: 'bold' },
-        { text: ',', style: 'normal' },
+
+        // Nome do paciente + vírgula (vírgula NÃO fica em negrito)
+        { text: paciente, style: 'bold', group: gidNomeVirgula },
+        { text: ',', style: 'normal', group: gidNomeVirgula },
+
         { text: ' ', style: 'normal' },
 
         ...cpfBlock,
@@ -1322,11 +1342,15 @@ function buildReceiptSegments({ acompanhado, nomeResponsavel, cpf, nome, valor, 
         { text: ' referente ao serviço prestado da instrumentação cirúrgica para cirurgia de ', style: 'normal' },
         { text: cirurgiaUp, style: 'bold' },
 
-        { text: ' realizada no hospital ', style: 'normal' },
-        { text: hospitalUp, style: 'bold' },
-        { text: '.', style: 'normal' }
+        { text: ' ', style: 'normal' },
+            { text: 'realizada no hospital ', style: 'normal' },
+
+        // Hospital + ponto final (ponto NÃO fica em negrito)
+        { text: hospitalUp, style: 'bold', group: gidHospitalPonto },
+        { text: '.', style: 'normal', group: gidHospitalPonto }
     ];
 }
+
 
 // Divide texto preservando espaços (para não acontecer "nohospital" / "dainstrumentação")
 function tokenizeSegments(segments) {
@@ -1375,6 +1399,11 @@ function layoutRichText(doc, segments, maxWidth, options = {}) {
     // Lista de palavras pequenas que ficam feias no fim da linha
     const orphanWords = options.orphanWords || ['da', 'de', 'do', 'das', 'dos', 'no', 'na', 'nos', 'nas', 'e'];
     const avoidOrphans = options.avoidOrphans !== false; // padrão: true
+
+    // ✅ Nova regra: se NOME + CPF (com a vírgula final do CPF) couberem na 1ª linha,
+    // forçamos a quebra logo após o CPF, para que o restante do texto comece na linha seguinte.
+    // (Isso evita 'buracos' no fim da linha e melhora a leitura.)
+    const forceBreakAfterCpf = options.forceBreakAfterCpfIfFitsFirstLine !== false; // padrão: true
 
     const tokens = tokenizeSegments(segments);
 
@@ -1535,6 +1564,15 @@ function layoutRichText(doc, segments, maxWidth, options = {}) {
             });
 
             i = j;
+
+            // ✅ Regra extra: se o CPF coube na PRIMEIRA linha (com a vírgula),
+            // então todo o restante do texto começa na linha seguinte.
+            // Isso evita "buracos" no fim da linha e melhora a leitura.
+            if (forceBreakAfterCpf && gid === cpfGroupId && lineIndex === 0 && !cpfWrapped) {
+                // Só quebra se ainda existir conteúdo depois do CPF
+                if (i < tokens.length) pushLine();
+            }
+
             continue;
         }
 
