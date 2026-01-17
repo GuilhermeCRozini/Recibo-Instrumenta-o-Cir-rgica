@@ -1774,10 +1774,10 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
     doc.text(dataCompleta, leftMargin, dateY);
 
     // Assinatura (sem linha, como no modelo)
-    // Pedido seu: assinatura em NEGRITO ("Daniela Ramos Oliveira" + "CPF 088.959.546-10")
+    // Pedido seu: assinatura em NEGRITO ("Danielle Rozini Moura" + "CPF 110.052.356-19")
     doc.setFont('times', 'bold');
-    doc.text('Daniela Ramos Oliveira', pageWidth / 2, signatureNameY, { align: 'center' });
-    doc.text('CPF 088.959.546-10', pageWidth / 2, signatureCpfY, { align: 'center' });
+    doc.text('Danielle Rozini Moura', pageWidth / 2, signatureNameY, { align: 'center' });
+    doc.text('CPF 110.052.356-19', pageWidth / 2, signatureCpfY, { align: 'center' });
     doc.setFont('times', 'normal');
 
     // ====== Nome do arquivo (ex: Recibo_DAVI_BONIN_MONTES_05-JANEIRO-2026.pdf) ======
