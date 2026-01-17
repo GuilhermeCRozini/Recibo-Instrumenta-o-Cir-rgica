@@ -1448,6 +1448,12 @@ function layoutRichText(doc, segments, maxWidth, options = {}) {
     // Flag para saber se o CPF foi empurrado para a linha de baixo
     let cpfWrapped = false;
 
+    // Flag para saber se aplicamos a regra: CPF coube na 1ª linha (com vírgula) e então
+    // forçamos o restante do texto para a linha seguinte.
+    // Usaremos isso para (em casos raros) centralizar a 1ª linha quando ela ficar "curta" demais,
+    // evitando um grande espaço em branco no final.
+    let cpfBrokeAfterFit = false;
+
     const getWidth = (tok) => {
         doc.setFont('times', tok.style === 'bold' ? 'bold' : 'normal');
         return doc.getTextWidth(tok.text);
@@ -1569,8 +1575,12 @@ function layoutRichText(doc, segments, maxWidth, options = {}) {
             // então todo o restante do texto começa na linha seguinte.
             // Isso evita "buracos" no fim da linha e melhora a leitura.
             if (forceBreakAfterCpf && gid === cpfGroupId && lineIndex === 0 && !cpfWrapped) {
-                // Só quebra se ainda existir conteúdo depois do CPF
-                if (i < tokens.length) pushLine();
+                // Só quebra se ainda existir conteúdo depois do CPF.
+                // Se isso acontecer e a 1ª linha ficar "curta" demais, podemos centralizá-la depois.
+                if (i < tokens.length) {
+                    cpfBrokeAfterFit = true;
+                    pushLine();
+                }
             }
 
             continue;
@@ -1602,13 +1612,35 @@ function layoutRichText(doc, segments, maxWidth, options = {}) {
     // Última linha
     pushLine();
 
-    return { lines, cpfWrapped };
+    // ✅ Centralização inteligente da 1ª linha (só quando necessário)
+    // Em alguns casos, a regra "CPF coube na 1ª linha → resto na 2ª" pode deixar
+    // um grande espaço em branco no fim da 1ª linha (ficando visualmente estranho).
+    // Então, se a 1ª linha ficou "curta" demais, centralizamos SOMENTE essa 1ª linha.
+    let centerFirstLineOnBigBlank = false;
+    if (cpfBrokeAfterFit && lines.length) {
+        const blank = availableWidthForLine(0) - lines[0].width;
+
+        // Limiares em mm:
+        // - absoluto: 28mm (bem visível)
+        // - relativo: 28% da largura útil da linha
+        const threshold = Math.max(28, availableWidthForLine(0) * 0.28);
+
+        if (blank >= threshold) centerFirstLineOnBigBlank = true;
+    }
+
+    return { lines, cpfWrapped, centerFirstLineOnBigBlank };
 }
 
 // Desenha (renderiza) o texto já "quebrado" em linhas
 function drawRichText(doc, layout, x, y, maxWidth, lineHeight, options = {}) {
     const indent = Number(options.firstLineIndent || 0);
-    const shouldCenterFirstLine = Boolean(options.centerFirstLineIfCpfWrapped && layout.cpfWrapped);
+    // 1) Regra antiga: quando o CPF foi empurrado para a linha de baixo, centraliza a 1ª linha.
+    // 2) Regra nova: quando houver um grande espaço em branco (CPF coube e o resto foi para a próxima linha),
+    //    centraliza a 1ª linha SOMENTE nesses casos.
+    const shouldCenterFirstLine = Boolean(
+        (options.centerFirstLineIfCpfWrapped && layout.cpfWrapped) ||
+        layout.centerFirstLineOnBigBlank
+    );
 
     // Desenha linha por linha
     layout.lines.forEach((line, idx) => {
