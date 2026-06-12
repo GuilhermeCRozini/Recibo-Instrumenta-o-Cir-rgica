@@ -10,6 +10,34 @@ let lastGeneratedPDF = null; // { blob: Blob, fileName: string }
 // Expondo para janelas filhas (usado no modo 'Apenas abrir' com botão Compartilhar)
 window.__getLastGeneratedPDF = () => lastGeneratedPDF;
 
+// ============================================================
+// ✅ Dados da assinatura / instrumentador
+// ------------------------------------------------------------
+// Comentário para iniciantes:
+// - Os campos "Instrumentador" e "CPF do Instrumentador" começam vazios.
+// - Por isso NÃO usamos valor padrão aqui.
+// - No input eles continuam vazios para o usuário inserir os dados corretos.
+// - No preview, quando ainda estão vazios, aparecem asteriscos para seguir o mesmo padrão
+//   dos demais campos pendentes do recibo.
+// - No PDF, se não forem preenchidos, continuam sem dados reais para evitar gerar um CPF incorreto.
+// ============================================================
+function getInstrumentadorData() {
+    const instrumentadorInput = document.getElementById('instrumentador');
+    const cpfInstrumentadorInput = document.getElementById('cpf-instrumentador');
+
+    // Lemos exatamente o que o usuário digitou e apenas removemos pontuação final
+    // que pode ter sido colocada por engano, mantendo o campo vazio se nada for digitado.
+    const nomeInstrumentador = stripTrailingTemplatePunctuation(
+        instrumentadorInput ? instrumentadorInput.value.trim() : ''
+    );
+
+    const cpfInstrumentador = stripTrailingTemplatePunctuation(
+        cpfInstrumentadorInput ? cpfInstrumentadorInput.value.trim() : ''
+    );
+
+    return { nomeInstrumentador, cpfInstrumentador };
+}
+
 /**
  * Faz download do PDF a partir de um Blob.
  * Obs: No iOS/Safari o atributo download pode ser ignorado (limitação do iOS).
@@ -994,6 +1022,9 @@ function updatePreview() {
     const mes = document.getElementById('mes').value;
     const ano = document.getElementById('ano').value;
 
+    // Dados da assinatura: usados no preview em tempo real.
+    const { nomeInstrumentador, cpfInstrumentador } = getInstrumentadorData();
+
     // Usamos versões "limpas" dos campos para evitar que vírgula/ponto FINAL do usuário
     // entre no <strong> (negrito). A pontuação do template fica fora do negrito.
     const nomeResponsavelClean = stripTrailingTemplatePunctuation(nomeResponsavel);
@@ -1027,6 +1058,22 @@ function updatePreview() {
         : '** de ********** de ****';
     
     document.querySelector('.receipt-location').textContent = 'Juiz de Fora, ' + dataCompleta;
+
+    // Atualiza somente a assinatura do preview.
+    // Comentário para iniciantes:
+    // - O preview deve mostrar a estrutura do recibo mesmo antes do usuário preencher tudo.
+    // - Por isso, quando o nome/CPF do instrumentador ainda estão vazios, usamos asteriscos,
+    //   igual aos outros dados pendentes do recibo (paciente, CPF, valor, cirurgia e hospital).
+    // - Isso evita que o usuário pense que aquela parte da assinatura "sumiu" do documento.
+    // - Importante: isso altera apenas a visualização do preview; o input continua vazio.
+    const assinaturaNomePreview = nomeInstrumentador || '********************';
+    const assinaturaCpfPreview = cpfInstrumentador ? 'CPF.: ' + cpfInstrumentador : 'CPF.: ***.***.***-**';
+
+    const signatureNameEl = document.querySelector('.signature-name');
+    const signatureCpfEl = document.querySelector('.signature-cpf');
+
+    if (signatureNameEl) signatureNameEl.textContent = assinaturaNomePreview;
+    if (signatureCpfEl) signatureCpfEl.textContent = assinaturaCpfPreview;
 }
 
 // Mostrar modal
@@ -1703,6 +1750,10 @@ vibrateDevice(100);
     const mes = document.getElementById('mes').value; // já vem em caixa alta (ex: JANEIRO)
     const ano = document.getElementById('ano').value;
 
+    // Dados que aparecem na assinatura do PDF.
+    // Eles vêm dos novos inputs e funcionam tanto para paciente comum quanto para "Acompanhado".
+    const { nomeInstrumentador, cpfInstrumentador } = getInstrumentadorData();
+
     // ====== Layout base do PDF (igual ao modelo anexado) ======
     const pageWidth = doc.internal.pageSize.getWidth();   // A4: 210mm
     const pageHeight = doc.internal.pageSize.getHeight(); // A4: 297mm
@@ -1805,10 +1856,28 @@ const titleY = (pageHeight - totalHeight) / 2 + titleAscent;
     const dataCompleta = `Juiz de Fora, ${diaFmt} de ${String(mes).toLocaleUpperCase('pt-BR')} de ${ano}`;
     doc.text(dataCompleta, leftMargin, dateY);
 
-    // Assinatura (sem linha, como no modelo)
+    // Assinatura do instrumentador
+    // Comentário para iniciantes:
+    // - A linha abaixo é desenhada apenas no PDF gerado.
+    // - Ela fica centralizada e serve como espaço visual para a assinatura manual.
+    // - A largura foi escolhida para caber uma assinatura sem ocupar a página inteira.
+    // - O nome e o CPF continuam usando somente os dados digitados nos inputs.
+    const signatureLineWidth = 78; // largura da linha da assinatura em milímetros
+    const signatureLineY = signatureNameY - 7; // posição da linha um pouco acima do nome
+    doc.setDrawColor(0);
+    doc.setLineWidth(0.3);
+    doc.line(
+        (pageWidth - signatureLineWidth) / 2,
+        signatureLineY,
+        (pageWidth + signatureLineWidth) / 2,
+        signatureLineY
+    );
+
     doc.setFont('times', 'bold');
-    doc.text('Yvette Ramos de Oliveira', pageWidth / 2, signatureNameY, { align: 'center' });
-    doc.text('CPF 722.586.406-87', pageWidth / 2, signatureCpfY, { align: 'center' });
+    doc.text(nomeInstrumentador, pageWidth / 2, signatureNameY, { align: 'center' });
+    if (cpfInstrumentador) {
+        doc.text('CPF.: ' + cpfInstrumentador, pageWidth / 2, signatureCpfY, { align: 'center' });
+    }
     doc.setFont('times', 'normal');
 
     // ====== Nome do arquivo (ex: Recibo_DAVI_BONIN_MONTES_05-JANEIRO-2026.pdf) ======

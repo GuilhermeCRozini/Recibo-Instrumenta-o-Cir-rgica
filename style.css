@@ -148,6 +148,28 @@ h1 {
     gap: 10px;
 }
 
+/*
+  Campos "Instrumentador" e "CPF do Instrumentador".
+  Comentário para iniciantes:
+  - display: grid cria duas colunas lado a lado.
+  - Usamos apenas esta classe nova para não alterar os outros campos do formulário.
+*/
+.instrumentador-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    align-items: start;
+    margin-bottom: 20px;
+}
+
+/*
+  Como os campos já estão dentro da linha, removemos a margem inferior
+  deles para a dupla ficar alinhada com os outros blocos do formulário.
+*/
+.instrumentador-row .form-group {
+    margin-bottom: 0;
+}
+
 #preview-section {
     background: #f8f9ff;
     padding: 30px;
@@ -379,6 +401,15 @@ h1 {
     .date-group {
         grid-template-columns: 1fr;
         gap: 10px;
+    }
+
+    /*
+      Em telas pequenas, colocamos os dois campos da assinatura um abaixo do outro.
+      Isso evita campos apertados e mantém a leitura confortável no celular.
+    */
+    .instrumentador-row {
+        grid-template-columns: 1fr;
+        gap: 20px;
     }
     
     #preview-section {
